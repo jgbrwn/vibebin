@@ -662,11 +662,16 @@ func createContainer(db *sql.DB, domain string, appPort int, sshKey string, dnsP
 		}
 	}
 
-	// STEP 2: Launch container from exeuntu OCI image with systemd init
-	// boot.autostart ensures container starts on host reboot
+	// STEP 2: Clean up any stale container with same name (handles failed previous creations)
+	// This prevents "In use" errors from partial container creations
+	exec.Command("incus", "delete", name, "--force").Run()
+
+	// STEP 3: Launch container from exeuntu OCI image with systemd init
+	// boot.autostart=last-state ensures container respects its previous state on host reboot
+	// (running containers restart, stopped containers stay stopped)
 	cmd := exec.Command("incus", "launch", ExeuntuImage, name,
 		"-c", "security.nesting=true",
-		"-c", "boot.autostart=true",
+		"-c", "boot.autostart=last-state",
 		"-c", "oci.entrypoint=/sbin/init")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to create container: %s - %w", string(out), err)
@@ -675,7 +680,7 @@ func createContainer(db *sql.DB, domain string, appPort int, sshKey string, dnsP
 	// Wait for container to start
 	time.Sleep(5 * time.Second)
 
-	// STEP 3: Add SSH key to container using file push (safer than shell echo)
+	// STEP 4: Add SSH key to container using file push (safer than shell echo)
 	if sshKey != "" {
 		exec.Command("incus", "exec", name, "--", "mkdir", "-p", "/home/exedev/.ssh").Run()
 		
@@ -693,10 +698,10 @@ func createContainer(db *sql.DB, domain string, appPort int, sshKey string, dnsP
 		exec.Command("incus", "exec", name, "--", "chmod", "600", "/home/exedev/.ssh/authorized_keys").Run()
 	}
 
-	// STEP 4: Get container IP
+	// STEP 5: Get container IP
 	_, ip, _, _ := getContainerStatus(name)
 
-	// STEP 5: Save to database AFTER successful container creation
+	// STEP 6: Save to database AFTER successful container creation
 	_, err := db.Exec("INSERT INTO containers (name, domain, app_port) VALUES (?, ?, ?)", name, domain, appPort)
 	if err != nil {
 		// Rollback: delete the container if DB insert fails
@@ -704,12 +709,12 @@ func createContainer(db *sql.DB, domain string, appPort int, sshKey string, dnsP
 		return fmt.Errorf("failed to save to database: %w", err)
 	}
 
-	// STEP 6: Configure Caddy (DNS has had time to propagate during container startup)
+	// STEP 7: Configure Caddy (DNS has had time to propagate during container startup)
 	if ip != "" {
 		updateCaddyConfig(name, domain, ip, appPort)
 	}
 
-	// STEP 7: Configure SSHPiper
+	// STEP 8: Configure SSHPiper
 	if ip != "" {
 		configureSSHPiper(name, ip)
 	}
@@ -790,8 +795,8 @@ func importContainer(db *sql.DB, name, domain string, appPort int) error {
 		configureSSHPiper(name, ip)
 	}
 	
-	// Set boot.autostart if not already set
-	exec.Command("incus", "config", "set", name, "boot.autostart=true").Run()
+	// Set boot.autostart to last-state if not already set
+	exec.Command("incus", "config", "set", name, "boot.autostart=last-state").Run()
 	
 	return nil
 }

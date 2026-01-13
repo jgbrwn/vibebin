@@ -86,7 +86,7 @@ sudo incus_manager
   - `https://shelley.domain.com` → container:9999
 - **SSH Access**: SSHPiper routes SSH by container name to `exedev` user
 - **State Preservation**: Container state (filesystem, etc.) preserved across reboots
-- **Auto-start**: Containers automatically start on host reboot
+- **Boot Behavior**: Containers respect their last state on host reboot (running→running, stopped→stopped)
 - **Resource Monitoring**: CPU and memory usage displayed
 - **Untracked Container Import**: Detect and import containers not created by incus_manager
 
@@ -163,9 +163,13 @@ The tool uses the Incus API (via `incus query` and JSON-formatted commands) as t
 - IP addresses
 - Resource usage (CPU, memory)
 
-### Container Autostart
+### Container Boot Behavior
 
-Containers are created with `boot.autostart=true`, ensuring they start automatically when the host reboots. The `incus-startup.service` handles this at system boot.
+Containers are created with `boot.autostart=last-state`, which means:
+- Running containers will restart when the host reboots
+- Stopped containers will stay stopped
+
+The `incus-startup.service` handles this at system boot.
 
 ## Limitations
 
