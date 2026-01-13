@@ -1,4 +1,4 @@
-# Incus Container Manager
+# Shelley-lxc | Incus Container Manager
 
 A self-hosted platform for running persistent, web-accessible development sandboxes powered by [Shelley](https://github.com/boldsoftware/shelley) AI coding agents.
 
