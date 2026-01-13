@@ -1,4 +1,4 @@
-# Shelley-lxc | Incus Container Manager
+# shelley-lxc | Incus Container Manager
 
 A self-hosted platform for running persistent, web-accessible development sandboxes powered by [Shelley](https://github.com/boldsoftware/shelley) AI coding agents.
 
@@ -78,7 +78,7 @@ go version
 
 ```bash
 # Clone and build
-git clone https://github.com/boldsoftware/shelley-lxc.git
+git clone https://github.com/jgbrwn/shelley-lxc.git
 cd shelley-lxc
 go build -o incus_manager incus_manager.go
 go build -o incus_sync_daemon incus_sync_daemon.go
