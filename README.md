@@ -74,6 +74,7 @@ sudo incus_manager
 - `s` - Start/Stop container
 - `r` - Restart container
 - `p` - Change app port
+- `a` - Change Shelley auth (username/password)
 - `Esc` - Back to list
 
 ## Features

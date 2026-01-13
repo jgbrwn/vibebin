@@ -46,6 +46,8 @@ const (
 	stateCreateAuthPass
 	stateContainerDetail
 	stateEditAppPort
+	stateEditAuthUser
+	stateEditAuthPass
 	stateLogs
 	stateUntracked
 	stateImportContainer
@@ -1156,6 +1158,38 @@ func updateContainerAppPort(db *sql.DB, name string, newPort int) error {
 	return err
 }
 
+func updateContainerAuth(db *sql.DB, name, newUser, newPass string) error {
+	var domain string
+	var appPort int
+	if err := db.QueryRow("SELECT domain, app_port FROM containers WHERE name = ?", name).Scan(&domain, &appPort); err != nil {
+		return err
+	}
+
+	_, ip, _, _ := getContainerStatus(name)
+	if ip == "" {
+		return fmt.Errorf("container has no IP")
+	}
+
+	// Hash the new password
+	authHash := ""
+	if newUser != "" && newPass != "" {
+		hashOut, hashErr := exec.Command("caddy", "hash-password", "--plaintext", newPass).Output()
+		if hashErr != nil {
+			return fmt.Errorf("failed to hash password: %w", hashErr)
+		}
+		authHash = strings.TrimSpace(string(hashOut))
+	}
+
+	// Update Caddy config with new auth
+	if err := updateCaddyConfig(name, domain, ip, appPort, newUser, authHash); err != nil {
+		return err
+	}
+
+	// Update database
+	_, err := db.Exec("UPDATE containers SET auth_user = ?, auth_hash = ? WHERE name = ?", newUser, authHash, name)
+	return err
+}
+
 func configureSSHPiper(name, ip string) {
 	pDir := filepath.Join(SSHPiperRoot, name)
 	os.MkdirAll(pDir, 0700)
@@ -1253,7 +1287,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleListKeys(key)
 	case stateContainerDetail:
 		return m.handleDetailKeys(key)
-	case stateCreateDomain, stateCreateDNSToken, stateCreateAppPort, stateCreateSSHKey, stateCreateAuthUser, stateCreateAuthPass, stateEditAppPort, stateImportContainer, stateImportAuthUser, stateImportAuthPass:
+	case stateCreateDomain, stateCreateDNSToken, stateCreateAppPort, stateCreateSSHKey, stateCreateAuthUser, stateCreateAuthPass, stateEditAppPort, stateEditAuthUser, stateEditAuthPass, stateImportContainer, stateImportAuthUser, stateImportAuthPass:
 		return m.handleInputKeys(key)
 	case stateCreateDNSProvider:
 		return m.handleDNSProviderKeys(key)
@@ -1358,6 +1392,19 @@ func (m model) handleDetailKeys(key string) (tea.Model, tea.Cmd) {
 		m.textInput.Placeholder = "8000"
 		m.textInput.SetValue(fmt.Sprintf("%d", c.AppPort))
 		m.textInput.Focus()
+	case "a":
+		// Edit Shelley auth credentials
+		m.state = stateEditAuthUser
+		m.textInput.Placeholder = "username"
+		// Get current username from DB
+		var currentUser sql.NullString
+		m.db.QueryRow("SELECT auth_user FROM containers WHERE name = ?", c.Name).Scan(&currentUser)
+		if currentUser.String != "" {
+			m.textInput.SetValue(currentUser.String)
+		} else {
+			m.textInput.SetValue("admin")
+		}
+		m.textInput.Focus()
 	case "q", "esc":
 		m.state = stateList
 		m.editingContainer = nil
@@ -1457,7 +1504,37 @@ func (m model) handleInputKeys(key string) (tea.Model, tea.Cmd) {
 		m.state = stateContainerDetail
 		m.textInput.Reset()
 		return m, m.refreshContainers()
-	
+
+	case stateEditAuthUser:
+		if val == "" {
+			m.status = "Username cannot be empty"
+			return m, nil
+		}
+		m.newAuthUser = val
+		m.state = stateEditAuthPass
+		m.textInput.Placeholder = "new password (min 8 chars)"
+		m.textInput.Reset()
+		m.textInput.EchoMode = textinput.EchoPassword
+		m.textInput.EchoCharacter = '*'
+
+	case stateEditAuthPass:
+		if len(val) < 8 {
+			m.status = "Password must be at least 8 characters"
+			return m, nil
+		}
+		m.textInput.EchoMode = textinput.EchoNormal
+		if m.editingContainer != nil {
+			err := updateContainerAuth(m.db, m.editingContainer.Name, m.newAuthUser, val)
+			if err != nil {
+				m.status = "Update failed: " + err.Error()
+			} else {
+				m.status = "Updated Shelley auth credentials"
+			}
+		}
+		m.state = stateContainerDetail
+		m.textInput.Reset()
+		return m, m.refreshContainers()
+
 	case stateImportContainer:
 		if val == "" {
 			m.status = "Domain cannot be empty"
@@ -1604,6 +1681,20 @@ func (m model) View() string {
 	case stateEditAppPort:
 		return fmt.Sprintf("✏️  EDIT APP PORT\n\nNew port:\n\n%s\n\n[Enter] Save  [Esc] Cancel", m.textInput.View())
 
+	case stateEditAuthUser:
+		containerName := ""
+		if m.editingContainer != nil {
+			containerName = m.editingContainer.Name
+		}
+		return fmt.Sprintf("🔐 EDIT SHELLEY AUTH: %s\n\nNew username:\n\n%s\n\n[Enter] Continue  [Esc] Cancel", containerName, m.textInput.View())
+
+	case stateEditAuthPass:
+		containerName := ""
+		if m.editingContainer != nil {
+			containerName = m.editingContainer.Name
+		}
+		return fmt.Sprintf("🔐 EDIT SHELLEY AUTH: %s\n\nNew password (min 8 chars):\n\n%s\n\n[Enter] Save  [Esc] Cancel", containerName, m.textInput.View())
+
 	case stateUntracked:
 		return m.viewUntracked()
 
@@ -1697,22 +1788,31 @@ func (m model) viewContainerDetail() string {
 	c := m.editingContainer
 	c.Status, c.IP, c.CPU, c.Memory = getContainerStatus(c.Name)
 
+	// Get auth user from DB
+	var authUser sql.NullString
+	m.db.QueryRow("SELECT auth_user FROM containers WHERE name = ?", c.Name).Scan(&authUser)
+	authDisplay := "(not set)"
+	if authUser.String != "" {
+		authDisplay = authUser.String
+	}
+
 	s := fmt.Sprintf("🔍 CONTAINER: %s\n", c.Name)
 	s += "═══════════════════════════════════════════════════════════════════════════════\n\n"
-	s += fmt.Sprintf("  Domain:     %s\n", c.Domain)
-	s += fmt.Sprintf("  Status:     %s\n", c.Status)
-	s += fmt.Sprintf("  IP:         %s\n", c.IP)
-	s += fmt.Sprintf("  CPU:        %s\n", c.CPU)
-	s += fmt.Sprintf("  Memory:     %s\n", c.Memory)
-	s += fmt.Sprintf("  App Port:   %d\n", c.AppPort)
-	s += fmt.Sprintf("  Created:    %s\n", c.CreatedAt.Format("2006-01-02 15:04:05"))
+	s += fmt.Sprintf("  Domain:       %s\n", c.Domain)
+	s += fmt.Sprintf("  Status:       %s\n", c.Status)
+	s += fmt.Sprintf("  IP:           %s\n", c.IP)
+	s += fmt.Sprintf("  CPU:          %s\n", c.CPU)
+	s += fmt.Sprintf("  Memory:       %s\n", c.Memory)
+	s += fmt.Sprintf("  App Port:     %d\n", c.AppPort)
+	s += fmt.Sprintf("  Shelley Auth: %s\n", authDisplay)
+	s += fmt.Sprintf("  Created:      %s\n", c.CreatedAt.Format("2006-01-02 15:04:05"))
 	s += "\n"
 	s += fmt.Sprintf("  🌐 App URL:     https://%s\n", c.Domain)
 	s += fmt.Sprintf("  🤖 Shelley URL: https://shelley.%s\n", c.Domain)
 	s += fmt.Sprintf("  🔑 SSH:         ssh -l %s <host> (via sshpiper on port 22)\n", c.Name)
 	s += "\n"
 	s += "───────────────────────────────────────────────────────────────────────────────\n"
-	s += "[s] Start/Stop  [r] Restart  [p] Change Port  [Esc] Back\n"
+	s += "[s] Start/Stop  [r] Restart  [p] Change Port  [a] Change Auth  [Esc] Back\n"
 
 	if m.status != "" {
 		s += "\n📋 " + m.status
