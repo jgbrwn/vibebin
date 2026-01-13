@@ -114,8 +114,16 @@ sudo incus_manager
 - `r` - Restart container
 - `p` - Change app port
 - `a` - Change Shelley auth (username/password)
+- `S` - Snapshot management
 - `u` - Update Shelley binary on container
 - `Esc` - Back to list
+
+**Snapshot View:**
+- `n` - Create new snapshot
+- `Enter/r` - Restore selected snapshot
+- `d` - Delete selected snapshot
+- `↑/↓` or `j/k` - Navigate snapshots
+- `Esc` - Back to container details
 
 ## Features
 
@@ -125,6 +133,7 @@ sudo incus_manager
 - **Boot Behavior**: Containers respect their last state on host reboot
 - **Resource Monitoring**: Live CPU and memory usage in TUI
 - **Untracked Import**: Detect and adopt existing Incus containers
+- **Snapshots**: Create, restore, and delete container snapshots
 
 ### Networking & Access
 - **Automatic HTTPS**: Caddy handles Let's Encrypt certificates
@@ -145,6 +154,40 @@ sudo incus_manager
 - **Update Shelley**: One-click update of Shelley binary on any container
 - **Web Agent**: Access Shelley at `https://shelley.yourdomain.com`
 - **Full System Access**: Shelley runs with full container access as `exedev` user
+
+## Snapshots
+
+Snapshots allow you to save and restore the complete state of a container.
+
+### Creating Snapshots
+
+From the container detail view, press `S` to access snapshot management, then `n` to create:
+
+```
+📸 SNAPSHOTS: my-container
+═══════════════════════════════════════════════════════════════════════════════
+
+[n] New  [Enter/r] Restore  [d] Delete  [Esc] Back
+
+  NAME                            CREATED               STATEFUL
+  ────────────────────────────────────────────────────────────────
+▶ snap-20260113-150000            2026-01-13 15:00:00   no
+  before-upgrade                  2026-01-12 10:30:00   no
+```
+
+### Use Cases
+
+- **Before risky changes**: Snapshot before major updates or experiments
+- **Known-good states**: Save working configurations you can restore to
+- **Quick rollback**: Instantly revert if something breaks
+
+### How It Works
+
+- **Create**: Captures the entire container filesystem state
+- **Restore**: Stops the container, restores the snapshot, then restarts
+- **Delete**: Removes the snapshot (does not affect the running container)
+
+> **Note**: Snapshots are stored by Incus and consume disk space. Delete old snapshots to free space.
 
 ## SSH Access
 
