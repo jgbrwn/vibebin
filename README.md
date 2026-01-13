@@ -83,7 +83,11 @@ sudo incus_manager
   - Cloudflare: Option to enable/disable proxy (defaults to DNS-only)
 - **Reverse Proxy**: Caddy auto-configured via Admin API (localhost:2019)
   - `https://domain.com` → container:8000 (configurable)
-  - `https://shelley.domain.com` → container:9999
+  - `https://shelley.domain.com` → container:9999 (protected by auth)
+- **Shelley Authentication**: Basic auth protects Shelley URLs
+  - Username/password set during container creation
+  - Uses Caddy's built-in HTTP basic authentication
+  - Password stored as bcrypt hash
 - **SSH Access**: SSHPiper routes SSH by container name to `exedev` user
 - **State Preservation**: Container state (filesystem, etc.) preserved across reboots
 - **Boot Behavior**: Containers respect their last state on host reboot (running→running, stopped→stopped)

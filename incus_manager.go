@@ -39,14 +39,18 @@ const (
 	stateCreateDomain
 	stateCreateDNSProvider
 	stateCreateDNSToken
-	stateCreateCFProxy  // New: Cloudflare proxy option
+	stateCreateCFProxy
 	stateCreateAppPort
 	stateCreateSSHKey
+	stateCreateAuthUser
+	stateCreateAuthPass
 	stateContainerDetail
 	stateEditAppPort
 	stateLogs
-	stateUntracked      // New: Show untracked containers
-	stateImportContainer // New: Import untracked container
+	stateUntracked
+	stateImportContainer
+	stateImportAuthUser
+	stateImportAuthPass
 )
 
 // DNS Provider types
@@ -102,6 +106,8 @@ type model struct {
 	newCFProxy     bool // Cloudflare proxy enabled
 	newAppPort     int
 	newSSHKey      string
+	newAuthUser    string
+	newAuthPass    string
 
 	// Untracked containers
 	untrackedContainers []string
@@ -358,11 +364,16 @@ func bootstrapCmd() tea.Cmd {
 			name TEXT UNIQUE NOT NULL,
 			domain TEXT UNIQUE NOT NULL,
 			app_port INTEGER DEFAULT 8000,
+			auth_user TEXT DEFAULT '',
+			auth_hash TEXT DEFAULT '',
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		)`)
 		if err != nil {
 			return bootstrapDoneMsg{err: err}
 		}
+		// Migration for existing DBs
+		db.Exec(`ALTER TABLE containers ADD COLUMN auth_user TEXT DEFAULT ''`)
+		db.Exec(`ALTER TABLE containers ADD COLUMN auth_hash TEXT DEFAULT ''`)
 
 		// Sync configs for all running containers (handles IP changes after reboot)
 		syncRunningContainers(db)
@@ -374,7 +385,7 @@ func bootstrapCmd() tea.Cmd {
 // syncRunningContainers updates Caddy and SSHPiper configs for all running containers
 // This handles the case where container IPs changed after a reboot
 func syncRunningContainers(db *sql.DB) {
-	rows, err := db.Query("SELECT name, domain, app_port FROM containers")
+	rows, err := db.Query("SELECT name, domain, app_port, auth_user, auth_hash FROM containers")
 	if err != nil {
 		return
 	}
@@ -383,13 +394,14 @@ func syncRunningContainers(db *sql.DB) {
 	for rows.Next() {
 		var name, domain string
 		var appPort int
-		if err := rows.Scan(&name, &domain, &appPort); err != nil {
+		var authUser, authHash sql.NullString
+		if err := rows.Scan(&name, &domain, &appPort, &authUser, &authHash); err != nil {
 			continue
 		}
 
 		status, ip, _, _ := getContainerStatus(name)
 		if status == "running" && ip != "" {
-			updateCaddyConfig(name, domain, ip, appPort)
+			updateCaddyConfig(name, domain, ip, appPort, authUser.String, authHash.String)
 			configureSSHPiper(name, ip)
 		}
 	}
@@ -619,7 +631,7 @@ func getUntrackedContainers(db *sql.DB) []string {
 	return untracked
 }
 
-func createContainer(db *sql.DB, domain string, appPort int, sshKey string, dnsProvider dnsProvider, dnsToken string, cfProxy bool) error {
+func createContainer(db *sql.DB, domain string, appPort int, sshKey string, dnsProvider dnsProvider, dnsToken string, cfProxy bool, authUser, authPass string) error {
 	// Validate domain format
 	if !isValidDomain(domain) {
 		return fmt.Errorf("invalid domain format: %s", domain)
@@ -701,20 +713,30 @@ func createContainer(db *sql.DB, domain string, appPort int, sshKey string, dnsP
 	// STEP 5: Get container IP
 	_, ip, _, _ := getContainerStatus(name)
 
-	// STEP 6: Save to database AFTER successful container creation
-	_, err := db.Exec("INSERT INTO containers (name, domain, app_port) VALUES (?, ?, ?)", name, domain, appPort)
+	// STEP 6: Hash password for Shelley auth
+	authHash := ""
+	if authUser != "" && authPass != "" {
+		hashOut, hashErr := exec.Command("caddy", "hash-password", "--plaintext", authPass).Output()
+		if hashErr == nil {
+			authHash = strings.TrimSpace(string(hashOut))
+		}
+	}
+
+	// STEP 7: Save to database AFTER successful container creation
+	_, err := db.Exec("INSERT INTO containers (name, domain, app_port, auth_user, auth_hash) VALUES (?, ?, ?, ?, ?)",
+		name, domain, appPort, authUser, authHash)
 	if err != nil {
 		// Rollback: delete the container if DB insert fails
 		exec.Command("incus", "delete", name, "--force").Run()
 		return fmt.Errorf("failed to save to database: %w", err)
 	}
 
-	// STEP 7: Configure Caddy (DNS has had time to propagate during container startup)
+	// STEP 8: Configure Caddy with auth (DNS has had time to propagate during container startup)
 	if ip != "" {
-		updateCaddyConfig(name, domain, ip, appPort)
+		updateCaddyConfig(name, domain, ip, appPort, authUser, authHash)
 	}
 
-	// STEP 8: Configure SSHPiper
+	// STEP 9: Configure SSHPiper
 	if ip != "" {
 		configureSSHPiper(name, ip)
 	}
@@ -772,7 +794,7 @@ func getHostPublicIP() string {
 }
 
 // importContainer adds an existing Incus container to our management DB
-func importContainer(db *sql.DB, name, domain string, appPort int) error {
+func importContainer(db *sql.DB, name, domain string, appPort int, authUser, authPass string) error {
 	// Verify container exists in Incus
 	_, ip, _, _ := getContainerStatus(name)
 	if ip == "" {
@@ -781,23 +803,32 @@ func importContainer(db *sql.DB, name, domain string, appPort int) error {
 		time.Sleep(3 * time.Second)
 		_, ip, _, _ = getContainerStatus(name)
 	}
-	
+
+	// Hash password for Shelley auth
+	authHash := ""
+	if authUser != "" && authPass != "" {
+		hashOut, hashErr := exec.Command("caddy", "hash-password", "--plaintext", authPass).Output()
+		if hashErr == nil {
+			authHash = strings.TrimSpace(string(hashOut))
+		}
+	}
+
 	// Add to database
-	_, err := db.Exec(`INSERT INTO containers (name, domain, app_port, created_at) VALUES (?, ?, ?, datetime('now'))`,
-		name, domain, appPort)
+	_, err := db.Exec(`INSERT INTO containers (name, domain, app_port, auth_user, auth_hash, created_at) VALUES (?, ?, ?, ?, ?, datetime('now'))`,
+		name, domain, appPort, authUser, authHash)
 	if err != nil {
 		return fmt.Errorf("failed to insert: %w", err)
 	}
-	
+
 	// Configure Caddy and SSHPiper
 	if ip != "" {
-		updateCaddyConfig(name, domain, ip, appPort)
+		updateCaddyConfig(name, domain, ip, appPort, authUser, authHash)
 		configureSSHPiper(name, ip)
 	}
-	
+
 	// Set boot.autostart to last-state if not already set
 	exec.Command("incus", "config", "set", name, "boot.autostart=last-state").Run()
-	
+
 	return nil
 }
 
@@ -822,15 +853,16 @@ func startContainer(db *sql.DB, name string) error {
 	if err != nil {
 		return fmt.Errorf("%s", string(out))
 	}
-	
+
 	// Wait for container to get IP and update Caddy config
 	time.Sleep(3 * time.Second)
 	_, ip, _, _ := getContainerStatus(name)
 	if ip != "" && db != nil {
 		var domain string
 		var appPort int
-		if err := db.QueryRow("SELECT domain, app_port FROM containers WHERE name = ?", name).Scan(&domain, &appPort); err == nil {
-			updateCaddyConfig(name, domain, ip, appPort)
+		var authUser, authHash sql.NullString
+		if err := db.QueryRow("SELECT domain, app_port, auth_user, auth_hash FROM containers WHERE name = ?", name).Scan(&domain, &appPort, &authUser, &authHash); err == nil {
+			updateCaddyConfig(name, domain, ip, appPort, authUser.String, authHash.String)
 			configureSSHPiper(name, ip)
 		}
 	}
@@ -853,15 +885,16 @@ func restartContainer(db *sql.DB, name string) error {
 			return fmt.Errorf("%s", string(out))
 		}
 	}
-	
+
 	// Wait for container to get IP and update Caddy config
 	time.Sleep(3 * time.Second)
 	_, ip, _, _ := getContainerStatus(name)
 	if ip != "" && db != nil {
 		var domain string
 		var appPort int
-		if err := db.QueryRow("SELECT domain, app_port FROM containers WHERE name = ?", name).Scan(&domain, &appPort); err == nil {
-			updateCaddyConfig(name, domain, ip, appPort)
+		var authUser, authHash sql.NullString
+		if err := db.QueryRow("SELECT domain, app_port, auth_user, auth_hash FROM containers WHERE name = ?", name).Scan(&domain, &appPort, &authUser, &authHash); err == nil {
+			updateCaddyConfig(name, domain, ip, appPort, authUser.String, authHash.String)
 			configureSSHPiper(name, ip)
 		}
 	}
@@ -1006,7 +1039,7 @@ func createDesecDNS(domain, ip, token string) error {
 	return nil
 }
 
-func updateCaddyConfig(name, domain, ip string, appPort int) error {
+func updateCaddyConfig(name, domain, ip string, appPort int, authUser, authHash string) error {
 	if ip == "" {
 		return fmt.Errorf("no IP address")
 	}
@@ -1018,7 +1051,7 @@ func updateCaddyConfig(name, domain, ip string, appPort int) error {
 	deleteCaddyRoute(client, caddyAPI, name+"-app")
 	deleteCaddyRoute(client, caddyAPI, name+"-shelley")
 
-	// Add app route
+	// Add app route (no auth - public)
 	appRoute := map[string]interface{}{
 		"@id":   name + "-app",
 		"match": []map[string]interface{}{{"host": []string{domain}}},
@@ -1031,14 +1064,36 @@ func updateCaddyConfig(name, domain, ip string, appPort int) error {
 		return fmt.Errorf("failed to add app route: %w", err)
 	}
 
-	// Add shelley route
+	// Build shelley route handlers
+	var shelleyHandlers []map[string]interface{}
+
+	// Add basic auth handler if credentials are set
+	if authUser != "" && authHash != "" {
+		authHandler := map[string]interface{}{
+			"handler": "authentication",
+			"providers": map[string]interface{}{
+				"http_basic": map[string]interface{}{
+					"accounts": []map[string]string{{
+						"username": authUser,
+						"password": authHash,
+					}},
+					"realm": "Shelley",
+				},
+			},
+		}
+		shelleyHandlers = append(shelleyHandlers, authHandler)
+	}
+
+	// Add reverse proxy handler
+	shelleyHandlers = append(shelleyHandlers, map[string]interface{}{
+		"handler":   "reverse_proxy",
+		"upstreams": []map[string]string{{"dial": fmt.Sprintf("%s:%d", ip, ShelleyPort)}},
+	})
+
 	shelleyRoute := map[string]interface{}{
 		"@id":   name + "-shelley",
 		"match": []map[string]interface{}{{"host": []string{"shelley." + domain}}},
-		"handle": []map[string]interface{}{{
-			"handler":   "reverse_proxy",
-			"upstreams": []map[string]string{{"dial": fmt.Sprintf("%s:%d", ip, ShelleyPort)}},
-		}},
+		"handle": shelleyHandlers,
 	}
 	if err := addCaddyRoute(client, caddyAPI, shelleyRoute); err != nil {
 		return fmt.Errorf("failed to add shelley route: %w", err)
@@ -1083,7 +1138,8 @@ func removeCaddyConfig(name string) {
 
 func updateContainerAppPort(db *sql.DB, name string, newPort int) error {
 	var domain string
-	if err := db.QueryRow("SELECT domain FROM containers WHERE name = ?", name).Scan(&domain); err != nil {
+	var authUser, authHash sql.NullString
+	if err := db.QueryRow("SELECT domain, auth_user, auth_hash FROM containers WHERE name = ?", name).Scan(&domain, &authUser, &authHash); err != nil {
 		return err
 	}
 
@@ -1092,7 +1148,7 @@ func updateContainerAppPort(db *sql.DB, name string, newPort int) error {
 		return fmt.Errorf("container has no IP")
 	}
 
-	if err := updateCaddyConfig(name, domain, ip, newPort); err != nil {
+	if err := updateCaddyConfig(name, domain, ip, newPort, authUser.String, authHash.String); err != nil {
 		return err
 	}
 
@@ -1197,7 +1253,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleListKeys(key)
 	case stateContainerDetail:
 		return m.handleDetailKeys(key)
-	case stateCreateDomain, stateCreateDNSToken, stateCreateAppPort, stateCreateSSHKey, stateEditAppPort, stateImportContainer:
+	case stateCreateDomain, stateCreateDNSToken, stateCreateAppPort, stateCreateSSHKey, stateCreateAuthUser, stateCreateAuthPass, stateEditAppPort, stateImportContainer, stateImportAuthUser, stateImportAuthPass:
 		return m.handleInputKeys(key)
 	case stateCreateDNSProvider:
 		return m.handleDNSProviderKeys(key)
@@ -1353,8 +1409,31 @@ func (m model) handleInputKeys(key string) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.newSSHKey = val
+		m.state = stateCreateAuthUser
+		m.textInput.Placeholder = "admin"
+		m.textInput.SetValue("admin")
+
+	case stateCreateAuthUser:
+		if val == "" {
+			m.status = "Username required for Shelley authentication"
+			return m, nil
+		}
+		m.newAuthUser = val
+		m.state = stateCreateAuthPass
+		m.textInput.Placeholder = "password (min 8 chars)"
+		m.textInput.Reset()
+		m.textInput.EchoMode = textinput.EchoPassword
+		m.textInput.EchoCharacter = '*'
+
+	case stateCreateAuthPass:
+		if len(val) < 8 {
+			m.status = "Password must be at least 8 characters"
+			return m, nil
+		}
+		m.newAuthPass = val
+		m.textInput.EchoMode = textinput.EchoNormal
 		m.status = "Creating container..."
-		err := createContainer(m.db, m.newDomain, m.newAppPort, m.newSSHKey, m.newDNSProvider, m.newDNSToken, m.newCFProxy)
+		err := createContainer(m.db, m.newDomain, m.newAppPort, m.newSSHKey, m.newDNSProvider, m.newDNSToken, m.newCFProxy, m.newAuthUser, m.newAuthPass)
 		if err != nil {
 			m.status = "Create failed: " + err.Error()
 		} else {
@@ -1384,13 +1463,37 @@ func (m model) handleInputKeys(key string) (tea.Model, tea.Cmd) {
 			m.status = "Domain cannot be empty"
 			return m, nil
 		}
+		m.newDomain = val
+		m.state = stateImportAuthUser
+		m.textInput.Placeholder = "admin"
+		m.textInput.SetValue("admin")
+
+	case stateImportAuthUser:
+		if val == "" {
+			m.status = "Username required for Shelley authentication"
+			return m, nil
+		}
+		m.newAuthUser = val
+		m.state = stateImportAuthPass
+		m.textInput.Placeholder = "password (min 8 chars)"
+		m.textInput.Reset()
+		m.textInput.EchoMode = textinput.EchoPassword
+		m.textInput.EchoCharacter = '*'
+
+	case stateImportAuthPass:
+		if len(val) < 8 {
+			m.status = "Password must be at least 8 characters"
+			return m, nil
+		}
+		m.newAuthPass = val
+		m.textInput.EchoMode = textinput.EchoNormal
 		if m.cursor < len(m.untrackedContainers) {
 			containerName := m.untrackedContainers[m.cursor]
-			err := importContainer(m.db, containerName, val, DefaultAppPort)
+			err := importContainer(m.db, containerName, m.newDomain, DefaultAppPort, m.newAuthUser, m.newAuthPass)
 			if err != nil {
 				m.status = "Import failed: " + err.Error()
 			} else {
-				m.status = fmt.Sprintf("Imported %s as %s", containerName, val)
+				m.status = fmt.Sprintf("Imported %s as %s", containerName, m.newDomain)
 			}
 		}
 		m.state = stateList
@@ -1490,7 +1593,13 @@ func (m model) View() string {
 		return fmt.Sprintf("📦 CREATE: %s\n\nApp port (default 8000):\n\n%s\n\n[Enter] Continue  [Esc] Cancel", m.newDomain, m.textInput.View())
 
 	case stateCreateSSHKey:
-		return fmt.Sprintf("📦 CREATE: %s\n\nSSH Public Key:\n\n%s\n\n[Enter] Create  [Esc] Cancel", m.newDomain, m.textInput.View())
+		return fmt.Sprintf("📦 CREATE: %s\n\nSSH Public Key:\n\n%s\n\n[Enter] Continue  [Esc] Cancel", m.newDomain, m.textInput.View())
+
+	case stateCreateAuthUser:
+		return fmt.Sprintf("🔐 CREATE: %s\n\nShelley Auth Username:\n\n%s\n\n[Enter] Continue  [Esc] Cancel", m.newDomain, m.textInput.View())
+
+	case stateCreateAuthPass:
+		return fmt.Sprintf("🔐 CREATE: %s\n\nShelley Auth Password (min 8 chars):\n\n%s\n\n[Enter] Create  [Esc] Cancel", m.newDomain, m.textInput.View())
 
 	case stateEditAppPort:
 		return fmt.Sprintf("✏️  EDIT APP PORT\n\nNew port:\n\n%s\n\n[Enter] Save  [Esc] Cancel", m.textInput.View())
@@ -1500,7 +1609,21 @@ func (m model) View() string {
 
 	case stateImportContainer:
 		if m.cursor < len(m.untrackedContainers) {
-			return fmt.Sprintf("📥 IMPORT CONTAINER: %s\n\nEnter domain to associate:\n\n%s\n\n[Enter] Import  [Esc] Cancel",
+			return fmt.Sprintf("📥 IMPORT CONTAINER: %s\n\nEnter domain to associate:\n\n%s\n\n[Enter] Continue  [Esc] Cancel",
+				m.untrackedContainers[m.cursor], m.textInput.View())
+		}
+		return "No container selected"
+
+	case stateImportAuthUser:
+		if m.cursor < len(m.untrackedContainers) {
+			return fmt.Sprintf("🔐 IMPORT: %s\n\nShelley Auth Username:\n\n%s\n\n[Enter] Continue  [Esc] Cancel",
+				m.untrackedContainers[m.cursor], m.textInput.View())
+		}
+		return "No container selected"
+
+	case stateImportAuthPass:
+		if m.cursor < len(m.untrackedContainers) {
+			return fmt.Sprintf("🔐 IMPORT: %s\n\nShelley Auth Password (min 8 chars):\n\n%s\n\n[Enter] Import  [Esc] Cancel",
 				m.untrackedContainers[m.cursor], m.textInput.View())
 		}
 		return "No container selected"
