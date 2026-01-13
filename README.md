@@ -4,9 +4,11 @@ A self-hosted platform for running persistent, web-accessible development sandbo
 
 ## What is this?
 
-This project provides the infrastructure to self-host your own [exe.dev](https://exe.dev)-like environment. Each container is a fully persistent Linux sandbox running the **exeuntu** OCI image (the same image used by exe.dev), with:
+This project provides the infrastructure to self-host your own [exe.dev](https://exe.dev)-like environment on virtually any Linux server—VPS, cloud VM (EC2, GCP, Azure), or dedicated hardware. Because it uses **Incus/LXC** (container-based virtualization rather than nested VMs), it runs efficiently on KVM, VMware, Xen, Hyper-V, and most other hypervisors.
 
-- **Shelley web agent** accessible via HTTPS at `shelley.yourdomain.com`
+Each container is a fully persistent Linux sandbox running the **exeuntu** OCI image (the same image used by exe.dev), with:
+
+- **Shelley web agent** accessible via HTTPS at `shelley.yourdomain.com` (protected by Caddy Basic Auth)
 - **Your app/site** accessible via HTTPS at `yourdomain.com`
 - **SSH access** for direct terminal access to your sandbox
 - **Persistent filesystem** that survives container restarts
@@ -36,9 +38,22 @@ This project provides the infrastructure to self-host your own [exe.dev](https:/
 
 ## Prerequisites
 
-- Ubuntu 22.04+ or Debian 12+ (amd64 or arm64)
-- A domain name with DNS you control
-- Root/sudo access
+- **Fresh/minimal Linux installation**: Ubuntu 22.04+ or Debian 12+ (amd64 or arm64)
+- **VPS or VM**: Works on most virtualization platforms (KVM, VMware, Xen, EC2, GCP, Azure, etc.)
+- **A domain name** with DNS you control
+- **A regular user with sudo access** (avoid running as root)
+
+### Security Recommendations
+
+Before installing, ensure your host SSH is properly secured:
+
+```bash
+# In /etc/ssh/sshd_config, verify these settings:
+PermitRootLogin no
+PasswordAuthentication no
+```
+
+All administrative tasks should be performed as a regular user with `sudo` privileges, not as root directly.
 
 ## Quick Start
 
@@ -70,10 +85,12 @@ The first run automatically installs:
 
 **Before creating containers**, you must configure the host SSH to work with SSHPiper:
 
-1. **Move host SSH to port 2222:**
+1. **Move host SSH to port 2222 and verify security settings:**
    ```bash
-   # Edit /etc/ssh/sshd_config and change:
+   # Edit /etc/ssh/sshd_config:
    Port 2222
+   PermitRootLogin no
+   PasswordAuthentication no
    
    # Restart SSH
    sudo systemctl restart sshd
@@ -86,11 +103,14 @@ The first run automatically installs:
 
 3. **Test host access (new port):**
    ```bash
-   ssh -p 2222 user@host.example.com
+   ssh -p 2222 youruser@host.example.com
    ```
 
 > **Important**: After this setup, SSH to your host uses port 2222. Port 22 is now
 > handled by SSHPiper for routing to containers.
+>
+> **Security Note**: Always use a regular user account with sudo privileges for host
+> administration. Never enable root login or password authentication on a public server.
 
 ## Usage
 
