@@ -319,7 +319,7 @@ func installCaddy() error {
 
 func installSSHPiper() error {
 	// Download sshpiperd from GitHub releases
-	arch := "amd64"
+	arch := "x86_64"
 	out, _ := exec.Command("uname", "-m").Output()
 	if strings.Contains(string(out), "aarch64") || strings.Contains(string(out), "arm64") {
 		arch = "arm64"
