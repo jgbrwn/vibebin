@@ -45,16 +45,20 @@ const (
 	stateCreateSSHKey
 	stateCreateAuthUser
 	stateCreateAuthPass
+	stateCreateModelSelect  // Select default LLM model
+	stateCreateAPIKey       // Enter API key for selected model
 	stateContainerDetail
 	stateEditAppPort
 	stateEditAuthUser
 	stateEditAuthPass
-	stateUpdateShelley  // Show shelley update output
+	stateUpdateShelley
 	stateLogs
 	stateUntracked
 	stateImportContainer
 	stateImportAuthUser
 	stateImportAuthPass
+	stateImportModelSelect  // Select default LLM model for import
+	stateImportAPIKey       // Enter API key for import
 )
 
 // DNS Provider types
@@ -65,6 +69,28 @@ const (
 	dnsCloudflare
 	dnsDesec
 )
+
+// LLM Model configuration
+type llmModel struct {
+	ID         string // Model ID for shelley.json
+	Name       string // Display name
+	Provider   string // Provider name (Anthropic, OpenAI, Google, etc.)
+	EnvVarName string // Environment variable name for API key
+}
+
+var availableModels = []llmModel{
+	{ID: "claude-sonnet-4-20250514", Name: "Claude Sonnet 4", Provider: "Anthropic", EnvVarName: "ANTHROPIC_API_KEY"},
+	{ID: "claude-opus-4-20250514", Name: "Claude Opus 4", Provider: "Anthropic", EnvVarName: "ANTHROPIC_API_KEY"},
+	{ID: "gpt-4.1", Name: "GPT-4.1", Provider: "OpenAI", EnvVarName: "OPENAI_API_KEY"},
+	{ID: "gpt-4.1-mini", Name: "GPT-4.1 Mini", Provider: "OpenAI", EnvVarName: "OPENAI_API_KEY"},
+	{ID: "gpt-4.1-nano", Name: "GPT-4.1 Nano", Provider: "OpenAI", EnvVarName: "OPENAI_API_KEY"},
+	{ID: "o3", Name: "O3", Provider: "OpenAI", EnvVarName: "OPENAI_API_KEY"},
+	{ID: "o4-mini", Name: "O4 Mini", Provider: "OpenAI", EnvVarName: "OPENAI_API_KEY"},
+	{ID: "gemini-2.5-pro", Name: "Gemini 2.5 Pro", Provider: "Google", EnvVarName: "GEMINI_API_KEY"},
+	{ID: "gemini-2.5-flash", Name: "Gemini 2.5 Flash", Provider: "Google", EnvVarName: "GEMINI_API_KEY"},
+	{ID: "deepseek-chat", Name: "DeepSeek Chat", Provider: "DeepSeek", EnvVarName: "DEEPSEEK_API_KEY"},
+	{ID: "grok-3-beta", Name: "Grok 3 Beta", Provider: "xAI", EnvVarName: "XAI_API_KEY"},
+}
 
 // Container entry from database
 type containerEntry struct {
@@ -115,6 +141,8 @@ type model struct {
 	newSSHKey      string
 	newAuthUser    string
 	newAuthPass    string
+	newModelIndex  int    // Index into availableModels
+	newAPIKey      string // API key for the selected model
 
 	// Untracked containers
 	untrackedContainers []string
@@ -638,7 +666,7 @@ func getUntrackedContainers(db *sql.DB) []string {
 	return untracked
 }
 
-func createContainer(db *sql.DB, domain string, appPort int, sshKey string, dnsProvider dnsProvider, dnsToken string, cfProxy bool, authUser, authPass string) error {
+func createContainer(db *sql.DB, domain string, appPort int, sshKey string, dnsProvider dnsProvider, dnsToken string, cfProxy bool, authUser, authPass string, modelIndex int, apiKey string) error {
 	// Validate domain format
 	if !isValidDomain(domain) {
 		return fmt.Errorf("invalid domain format: %s", domain)
@@ -748,6 +776,11 @@ func createContainer(db *sql.DB, domain string, appPort int, sshKey string, dnsP
 		configureSSHPiper(name, ip)
 	}
 
+	// STEP 10: Configure Shelley (shelley.json and API key)
+	if modelIndex >= 0 && modelIndex < len(availableModels) {
+		configureShelley(name, modelIndex, apiKey)
+	}
+
 	return nil
 }
 
@@ -833,7 +866,7 @@ func checkAllDNSForDomain(domain string) bool {
 }
 
 // importContainer adds an existing Incus container to our management DB
-func importContainer(db *sql.DB, name, domain string, appPort int, authUser, authPass string) error {
+func importContainer(db *sql.DB, name, domain string, appPort int, authUser, authPass string, modelIndex int, apiKey string) error {
 	// Verify container exists in Incus
 	_, ip, _, _ := getContainerStatus(name)
 	if ip == "" {
@@ -867,6 +900,11 @@ func importContainer(db *sql.DB, name, domain string, appPort int, authUser, aut
 
 	// Set boot.autostart to last-state if not already set
 	exec.Command("incus", "config", "set", name, "boot.autostart=last-state").Run()
+
+	// Configure Shelley (shelley.json and API key)
+	if modelIndex >= 0 && modelIndex < len(availableModels) {
+		configureShelley(name, modelIndex, apiKey)
+	}
 
 	return nil
 }
@@ -1234,6 +1272,70 @@ func configureSSHPiper(name, ip string) {
 	os.WriteFile(filepath.Join(pDir, "sshpiper_upstream"), []byte("exedev@"+ip+":22\n"), 0600)
 }
 
+// configureShelley updates shelley.json and sets the API key in bashrc
+func configureShelley(containerName string, modelIndex int, apiKey string) {
+	if modelIndex < 0 || modelIndex >= len(availableModels) {
+		return
+	}
+	model := availableModels[modelIndex]
+
+	// Create the new shelley.json content
+	// Remove: llm_gateway, terminal_url, links (back to exe.dev)
+	shelleyConfig := fmt.Sprintf(`{"default_model":"%s","key_generator":"echo irrelevant"}`, model.ID)
+
+	// Write shelley.json to container (as root)
+	tmpFile, err := os.CreateTemp("", "shelley-json")
+	if err != nil {
+		return
+	}
+	tmpFile.WriteString(shelleyConfig)
+	tmpFile.Close()
+	defer os.Remove(tmpFile.Name())
+
+	// Push to container
+	exec.Command("incus", "file", "push", tmpFile.Name(), containerName+"/exe.dev/shelley.json").Run()
+	// Set ownership to root
+	exec.Command("incus", "exec", containerName, "--", "chown", "root:root", "/exe.dev/shelley.json").Run()
+	exec.Command("incus", "exec", containerName, "--", "chmod", "644", "/exe.dev/shelley.json").Run()
+
+	// Add API key to exedev's bashrc
+	exportLine := fmt.Sprintf("export %s='%s'", model.EnvVarName, apiKey)
+	
+	// Check if the env var already exists in bashrc and update/add it
+	bashrcPath := "/home/exedev/.bashrc"
+	
+	// Read current bashrc
+	readCmd := exec.Command("incus", "exec", containerName, "--", "cat", bashrcPath)
+	currentBashrc, _ := readCmd.Output()
+	
+	// Check if this env var already exists
+	lines := strings.Split(string(currentBashrc), "\n")
+	found := false
+	for i, line := range lines {
+		if strings.HasPrefix(line, "export "+model.EnvVarName+"=") {
+			lines[i] = exportLine
+			found = true
+			break
+		}
+	}
+	if !found {
+		lines = append(lines, exportLine)
+	}
+	
+	// Write updated bashrc
+	newBashrc := strings.Join(lines, "\n")
+	tmpBashrc, err := os.CreateTemp("", "bashrc")
+	if err != nil {
+		return
+	}
+	tmpBashrc.WriteString(newBashrc)
+	tmpBashrc.Close()
+	defer os.Remove(tmpBashrc.Name())
+	
+	exec.Command("incus", "file", "push", tmpBashrc.Name(), containerName+bashrcPath).Run()
+	exec.Command("incus", "exec", containerName, "--", "chown", "exedev:exedev", bashrcPath).Run()
+}
+
 // Log streaming
 func streamLogsCmd(service string) tea.Cmd {
 	return func() tea.Msg {
@@ -1357,12 +1459,16 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleListKeys(key)
 	case stateContainerDetail:
 		return m.handleDetailKeys(key)
-	case stateCreateDomain, stateCreateDNSToken, stateCreateAppPort, stateCreateSSHKey, stateCreateAuthUser, stateCreateAuthPass, stateEditAppPort, stateEditAuthUser, stateEditAuthPass, stateImportContainer, stateImportAuthUser, stateImportAuthPass:
+	case stateCreateDomain, stateCreateDNSToken, stateCreateAppPort, stateCreateSSHKey, stateCreateAuthUser, stateCreateAuthPass, stateCreateAPIKey, stateEditAppPort, stateEditAuthUser, stateEditAuthPass, stateImportContainer, stateImportAuthUser, stateImportAuthPass, stateImportAPIKey:
 		return m.handleInputKeys(key)
 	case stateCreateDNSProvider:
 		return m.handleDNSProviderKeys(key)
 	case stateCreateCFProxy:
 		return m.handleCFProxyKeys(key)
+	case stateCreateModelSelect:
+		return m.handleModelSelectKeys(key)
+	case stateImportModelSelect:
+		return m.handleImportModelSelectKeys(key)
 	case stateUntracked:
 		return m.handleUntrackedKeys(key)
 	case stateLogs:
@@ -1577,8 +1683,19 @@ func (m model) handleInputKeys(key string) (tea.Model, tea.Cmd) {
 		}
 		m.newAuthPass = val
 		m.textInput.EchoMode = textinput.EchoNormal
+		// Go to model selection
+		m.state = stateCreateModelSelect
+		m.newModelIndex = 0 // Default to first model
+		m.textInput.Reset()
+
+	case stateCreateAPIKey:
+		if val == "" {
+			m.status = "API key is required"
+			return m, nil
+		}
+		m.newAPIKey = val
 		m.status = "Creating container..."
-		err := createContainer(m.db, m.newDomain, m.newAppPort, m.newSSHKey, m.newDNSProvider, m.newDNSToken, m.newCFProxy, m.newAuthUser, m.newAuthPass)
+		err := createContainer(m.db, m.newDomain, m.newAppPort, m.newSSHKey, m.newDNSProvider, m.newDNSToken, m.newCFProxy, m.newAuthUser, m.newAuthPass, m.newModelIndex, m.newAPIKey)
 		if err != nil {
 			m.status = "Create failed: " + err.Error()
 		} else {
@@ -1670,9 +1787,20 @@ func (m model) handleInputKeys(key string) (tea.Model, tea.Cmd) {
 		}
 		m.newAuthPass = val
 		m.textInput.EchoMode = textinput.EchoNormal
+		// Go to model selection for import
+		m.state = stateImportModelSelect
+		m.newModelIndex = 0
+		m.textInput.Reset()
+
+	case stateImportAPIKey:
+		if val == "" {
+			m.status = "API key is required"
+			return m, nil
+		}
+		m.newAPIKey = val
 		if m.cursor < len(m.untrackedContainers) {
 			containerName := m.untrackedContainers[m.cursor]
-			err := importContainer(m.db, containerName, m.newDomain, DefaultAppPort, m.newAuthUser, m.newAuthPass)
+			err := importContainer(m.db, containerName, m.newDomain, DefaultAppPort, m.newAuthUser, m.newAuthPass, m.newModelIndex, m.newAPIKey)
 			if err != nil {
 				m.status = "Import failed: " + err.Error()
 			} else {
@@ -1718,6 +1846,46 @@ func (m model) handleCFProxyKeys(key string) (tea.Model, tea.Cmd) {
 		m.newCFProxy = true
 		m.state = stateCreateDNSToken
 		m.textInput.Placeholder = "Cloudflare API Token"
+		m.textInput.Focus()
+	}
+	return m, nil
+}
+
+func (m model) handleModelSelectKeys(key string) (tea.Model, tea.Cmd) {
+	switch key {
+	case "up", "k":
+		if m.newModelIndex > 0 {
+			m.newModelIndex--
+		}
+	case "down", "j":
+		if m.newModelIndex < len(availableModels)-1 {
+			m.newModelIndex++
+		}
+	case "enter":
+		// Proceed to API key input
+		model := availableModels[m.newModelIndex]
+		m.state = stateCreateAPIKey
+		m.textInput.Placeholder = model.EnvVarName + " value"
+		m.textInput.Focus()
+	}
+	return m, nil
+}
+
+func (m model) handleImportModelSelectKeys(key string) (tea.Model, tea.Cmd) {
+	switch key {
+	case "up", "k":
+		if m.newModelIndex > 0 {
+			m.newModelIndex--
+		}
+	case "down", "j":
+		if m.newModelIndex < len(availableModels)-1 {
+			m.newModelIndex++
+		}
+	case "enter":
+		// Proceed to API key input
+		model := availableModels[m.newModelIndex]
+		m.state = stateImportAPIKey
+		m.textInput.Placeholder = model.EnvVarName + " value"
 		m.textInput.Focus()
 	}
 	return m, nil
@@ -1793,7 +1961,15 @@ func (m model) View() string {
 		return fmt.Sprintf("🔐 CREATE: %s\n\nShelley Auth Username:\n\n%s\n\n[Enter] Continue  [Esc] Cancel", m.newDomain, m.textInput.View())
 
 	case stateCreateAuthPass:
-		return fmt.Sprintf("🔐 CREATE: %s\n\nShelley Auth Password (min 8 chars):\n\n%s\n\n[Enter] Create  [Esc] Cancel", m.newDomain, m.textInput.View())
+		return fmt.Sprintf("🔐 CREATE: %s\n\nShelley Auth Password (min 8 chars):\n\n%s\n\n[Enter] Continue  [Esc] Cancel", m.newDomain, m.textInput.View())
+
+	case stateCreateModelSelect:
+		return m.viewModelSelect("CREATE: "+m.newDomain)
+
+	case stateCreateAPIKey:
+		model := availableModels[m.newModelIndex]
+		return fmt.Sprintf("🤖 CREATE: %s\n\nSelected model: %s (%s)\n\nEnter %s:\n\n%s\n\n[Enter] Create Container  [Esc] Cancel",
+			m.newDomain, model.Name, model.Provider, model.EnvVarName, m.textInput.View())
 
 	case stateEditAppPort:
 		return fmt.Sprintf("✏️  EDIT APP PORT\n\nNew port:\n\n%s\n\n[Enter] Save  [Esc] Cancel", m.textInput.View())
@@ -1849,8 +2025,22 @@ func (m model) View() string {
 
 	case stateImportAuthPass:
 		if m.cursor < len(m.untrackedContainers) {
-			return fmt.Sprintf("🔐 IMPORT: %s\n\nShelley Auth Password (min 8 chars):\n\n%s\n\n[Enter] Import  [Esc] Cancel",
+			return fmt.Sprintf("🔐 IMPORT: %s\n\nShelley Auth Password (min 8 chars):\n\n%s\n\n[Enter] Continue  [Esc] Cancel",
 				m.untrackedContainers[m.cursor], m.textInput.View())
+		}
+		return "No container selected"
+
+	case stateImportModelSelect:
+		if m.cursor < len(m.untrackedContainers) {
+			return m.viewModelSelect("IMPORT: " + m.untrackedContainers[m.cursor])
+		}
+		return "No container selected"
+
+	case stateImportAPIKey:
+		if m.cursor < len(m.untrackedContainers) {
+			model := availableModels[m.newModelIndex]
+			return fmt.Sprintf("🤖 IMPORT: %s\n\nSelected model: %s (%s)\n\nEnter %s:\n\n%s\n\n[Enter] Import Container  [Esc] Cancel",
+				m.untrackedContainers[m.cursor], model.Name, model.Provider, model.EnvVarName, m.textInput.View())
 		}
 		return "No container selected"
 
@@ -1863,6 +2053,24 @@ func (m model) View() string {
 	default:
 		return m.viewList()
 	}
+}
+
+func (m model) viewModelSelect(title string) string {
+	s := fmt.Sprintf("🤖 %s\n", title)
+	s += "═══════════════════════════════════════════════════════════════════════════════\n\n"
+	s += "Select default LLM model for Shelley:\n\n"
+
+	for i, model := range availableModels {
+		cursor := "  "
+		if i == m.newModelIndex {
+			cursor = "▶ "
+		}
+		s += fmt.Sprintf("%s[%d] %-25s (%s)\n", cursor, i+1, model.Name, model.Provider)
+	}
+
+	s += "\n───────────────────────────────────────────────────────────────────────────────\n"
+	s += "[↑/↓] Navigate  [Enter] Select  [Esc] Cancel\n"
+	return s
 }
 
 func (m model) viewList() string {
