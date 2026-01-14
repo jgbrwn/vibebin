@@ -177,6 +177,26 @@ func (m model) Init() tea.Cmd {
 	return checkPrerequisitesCmd()
 }
 
+// isVersionAtLeast checks if version string (e.g., "6.20") is >= major.minor
+func isVersionAtLeast(ver string, major, minor int) bool {
+	parts := strings.Split(ver, ".")
+	if len(parts) < 1 {
+		return false
+	}
+	var verMajor, verMinor int
+	fmt.Sscanf(parts[0], "%d", &verMajor)
+	if len(parts) > 1 {
+		fmt.Sscanf(parts[1], "%d", &verMinor)
+	}
+	if verMajor > major {
+		return true
+	}
+	if verMajor == major && verMinor >= minor {
+		return true
+	}
+	return false
+}
+
 func tickCmd() tea.Cmd {
 	return tea.Every(2*time.Second, func(t time.Time) tea.Msg { return tickMsg(t) })
 }
@@ -186,17 +206,17 @@ func checkPrerequisitesCmd() tea.Cmd {
 	return func() tea.Msg {
 		var missing []string
 
-		// Check incus (need 6.3+ from zabbly)
+		// Check incus (need 6.3+ from zabbly for OCI support)
 		out, err := exec.Command("incus", "version").CombinedOutput()
-		if err != nil || strings.Contains(string(out), "unreachable") {
+		if err != nil || strings.Contains(string(out), "unreachable") || strings.Contains(string(out), "Error") {
 			missing = append(missing, "incus")
 		} else {
-			// Check version - need 6.3+
+			// Check version - need 6.3+ for OCI image support
 			lines := strings.Split(string(out), "\n")
 			for _, line := range lines {
 				if strings.HasPrefix(line, "Client version:") {
 					ver := strings.TrimSpace(strings.TrimPrefix(line, "Client version:"))
-					if ver < "6.3" {
+					if !isVersionAtLeast(ver, 6, 3) {
 						missing = append(missing, "incus")
 					}
 					break
