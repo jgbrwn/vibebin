@@ -40,7 +40,7 @@ Each container is a fully persistent Linux sandbox running the **exeuntu** OCI i
 |-----------|--------|
 | **Incus (LXC)** | Container runtime - lightweight, persistent Linux containers |
 | **Caddy** | Reverse proxy with automatic HTTPS (Let's Encrypt with ZeroSSL fallback) |
-| **SSHPiper** | SSH routing - access any container via `ssh container-name@host` |
+| **SSHPiper** | SSH routing - access any container via `ssh -p 2222 container-name@host` |
 | **exeuntu** | OCI base image (maintained by exe.dev team) with development tools pre-installed |
 | **Shelley** | AI coding agent running inside each container |
 
@@ -129,32 +129,27 @@ The first run automatically installs:
 
 ## ⚠️ Required: SSHPiper Manual Setup (After First Run)
 
-**Before creating containers**, you must configure the host SSH to work with SSHPiper:
+**Before creating containers**, verify SSHPiper is running:
 
-1. **Move host SSH to port 2222 and verify security settings:**
-   ```bash
-   # Edit /etc/ssh/sshd_config:
-   Port 2222
-   PermitRootLogin no
-   PasswordAuthentication no
-   
-   # Restart SSH
-   sudo systemctl restart sshd
-   ```
+```bash
+# Check SSHPiper status (should be active)
+sudo systemctl status sshpiperd
 
-2. **Start SSHPiper:**
-   ```bash
-   sudo systemctl enable --now sshpiperd
-   ```
+# If not running, start it
+sudo systemctl enable --now sshpiperd
+```
 
-3. **Test host access (new port):**
-   ```bash
-   ssh -p 2222 youruser@host.example.com
-   ```
+SSHPiper listens on **port 2222** for container SSH access. Host SSH remains on port 22.
 
-> **Important**: After this setup, SSH to your host uses port 2222. Port 22 is now
-> handled by SSHPiper for routing to containers.
->
+### Verify Security Settings
+
+Ensure your host SSH is properly secured in `/etc/ssh/sshd_config`:
+
+```bash
+PermitRootLogin no
+PasswordAuthentication no
+```
+
 > **Security Note**: Always use a regular user account with sudo privileges for host
 > administration. Never enable root login or password authentication on a public server.
 
@@ -206,7 +201,7 @@ sudo incus_manager
 - **Reverse Proxy**: Each container gets two endpoints:
   - `https://domain.com` → Your app (port 8000, configurable)
   - `https://shelley.domain.com` → Shelley web agent (port 9999)
-- **SSH Routing**: SSHPiper enables `ssh container-name@host` access
+- **SSH Routing**: SSHPiper on port 2222 enables `ssh -p 2222 container-name@host` access
 - **Auto DNS**: Cloudflare and deSEC API integration
 
 ### Security
@@ -257,15 +252,15 @@ From the container detail view, press `S` to access snapshot management, then `n
 
 ## SSH Access
 
-### To containers:
+### To containers (via SSHPiper on port 2222):
 ```bash
-ssh container-name@host.example.com
+ssh -p 2222 container-name@host.example.com
 # You'll be logged in as 'exedev' with sudo access
 ```
 
-### To host:
+### To host (standard SSH on port 22):
 ```bash
-ssh -p 2222 user@host.example.com
+ssh user@host.example.com
 ```
 
 ## DNS Configuration
@@ -284,7 +279,7 @@ Caddy will automatically obtain Let's Encrypt certificates.
                     ┌────────────┴────────────┐
                     │                         │
                     ▼                         ▼
-              HTTPS (:443)              SSH (:22)
+              HTTPS (:443)         SSH (:2222 via SSHPiper)
                     │                         │
 ┌───────────────────▼─────────────────────▼─────────────────┐
 │                         Host System                          │
@@ -329,7 +324,7 @@ Caddy will automatically obtain Let's Encrypt certificates.
 
 1. **HTTPS requests** to `myapp.example.com` → Caddy → Container's app (port 8000)
 2. **HTTPS requests** to `shelley.myapp.example.com` → Caddy (with auth) → Container's Shelley (port 9999)
-3. **SSH connections** as `myapp-example-com@host` → SSHPiper → Container's SSH as `exedev`
+3. **SSH connections** to port 2222 as `myapp-example-com@host` → SSHPiper → Container's SSH as `exedev`
 
 ### Caddy Configuration
 
@@ -375,9 +370,9 @@ incus info container-name
 - Check Caddy logs: `journalctl -u caddy -f`
 - Check current routes: `curl -s http://localhost:2019/config/apps/http/servers/srv0/routes | jq .`
 
-**SSH not working:**
+**SSH to containers not working:**
 - Verify SSHPiper is running: `systemctl status sshpiperd`
-- Check host SSH moved to port 2222
+- Ensure you're using port 2222: `ssh -p 2222 container-name@host`
 - Verify upstream config: `cat /var/lib/sshpiper/container-name/sshpiper_upstream`
 
 **Sync daemon issues:**

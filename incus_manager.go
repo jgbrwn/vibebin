@@ -494,7 +494,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/sshpiperd -i /etc/sshpiper/server_key workingdir --root /var/lib/sshpiper --no-check-perm
+ExecStart=/usr/local/bin/sshpiperd -p 2222 -i /etc/sshpiper/server_key workingdir --root /var/lib/sshpiper --no-check-perm
 Restart=always
 RestartSec=5
 
@@ -2413,7 +2413,7 @@ func (m model) viewContainerDetail() string {
 	s += "\n"
 	s += fmt.Sprintf("  🌐 App URL:     https://%s\n", c.Domain)
 	s += fmt.Sprintf("  🤖 Shelley URL: https://shelley.%s\n", c.Domain)
-	s += fmt.Sprintf("  🔑 SSH:         ssh -l %s <host> (via sshpiper on port 22)\n", c.Name)
+	s += fmt.Sprintf("  🔑 SSH:         ssh -p 2222 %s@<host> (via sshpiper)\n", c.Name)
 	s += "\n"
 	s += "───────────────────────────────────────────────────────────────────────────────\n"
 	s += "[s] Start/Stop  [r] Restart  [p] Change Port  [a] Change Auth\n"
