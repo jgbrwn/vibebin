@@ -10,9 +10,12 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -26,6 +29,7 @@ const (
 	SSHPiperRoot   = "/var/lib/sshpiper"
 	ExeuntuImage   = "ghcr:boldsoftware/exeuntu:latest"
 	DBPath         = "/var/lib/shelley/containers.db"
+	PIDFile        = "/var/run/incus_manager.pid"
 	DefaultAppPort = 8000
 	ShelleyPort    = 9999
 )
@@ -2652,8 +2656,66 @@ func truncate(s string, max int) string {
 	return s[:max-2] + ".."
 }
 
+// cleanupStaleProcesses kills any orphaned incus_manager processes
+func cleanupStaleProcesses() {
+	// Check PID file first
+	if pidData, err := os.ReadFile(PIDFile); err == nil {
+		if pid, err := strconv.Atoi(strings.TrimSpace(string(pidData))); err == nil {
+			// Check if process exists and is incus_manager
+			if process, err := os.FindProcess(pid); err == nil {
+				// Check if it's actually running (signal 0 tests existence)
+				if err := process.Signal(syscall.Signal(0)); err == nil {
+					// Process exists, check if it's incus_manager
+					cmdline, _ := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
+					if strings.Contains(string(cmdline), "incus_manager") {
+						fmt.Fprintf(os.Stderr, "Terminating stale incus_manager process (PID %d)...\n", pid)
+						process.Signal(syscall.SIGTERM)
+						time.Sleep(500 * time.Millisecond)
+						// Force kill if still running
+						if err := process.Signal(syscall.Signal(0)); err == nil {
+							process.Signal(syscall.SIGKILL)
+						}
+					}
+				}
+			}
+		}
+	}
+	os.Remove(PIDFile)
+}
+
+// writePIDFile writes our PID to the PID file
+func writePIDFile() error {
+	return os.WriteFile(PIDFile, []byte(strconv.Itoa(os.Getpid())), 0644)
+}
+
+// removePIDFile removes the PID file on exit
+func removePIDFile() {
+	os.Remove(PIDFile)
+}
+
 func main() {
-	p := tea.NewProgram(initialModel())
+	// Clean up any stale processes from previous runs
+	cleanupStaleProcesses()
+
+	// Write our PID file
+	if err := writePIDFile(); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: could not write PID file: %v\n", err)
+	}
+	defer removePIDFile()
+
+	// Set up signal handling for graceful shutdown
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGHUP, syscall.SIGTERM, syscall.SIGINT)
+
+	// Create the bubbletea program with options for better terminal handling
+	p := tea.NewProgram(initialModel(), tea.WithAltScreen())
+
+	// Handle signals in a goroutine
+	go func() {
+		<-sigChan
+		p.Quit()
+	}()
+
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
