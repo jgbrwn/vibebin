@@ -166,6 +166,7 @@ sudo incus_manager
 - `Enter` - View container details
 - `d` - Delete container
 - `u` - Show untracked containers (import existing)
+- `D` - Manage DNS API tokens (Cloudflare/deSEC)
 - `i` - View Incus logs
 - `l` - View sync daemon logs
 - `q` - Quit
@@ -202,7 +203,7 @@ sudo incus_manager
   - `https://domain.com` → Your app (port 8000, configurable)
   - `https://shelley.domain.com` → Shelley web agent (port 9999)
 - **SSH Routing**: SSHPiper on port 2222 enables `ssh -p 2222 container-name@host` access
-- **Auto DNS**: Cloudflare and deSEC API integration
+- **Auto DNS**: Cloudflare and deSEC API integration (tokens saved securely for reuse)
 
 ### Security
 - **Shelley Authentication**: HTTP Basic Auth protects the Shelley web interface
@@ -353,7 +354,6 @@ The `incus-startup.service` handles this at system boot.
 ## Limitations & Known Issues
 
 - **IPv4 only**: IPv6 addresses not currently handled
-- **DNS tokens not stored**: Re-enter if you need to update DNS records
 - **Single host**: No clustering support (single Incus host only)
 - **Two-part TLDs**: Domains like `.co.uk` need manual DNS setup (see below)
 
