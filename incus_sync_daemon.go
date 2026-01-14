@@ -84,8 +84,12 @@ func main() {
 	fmt.Println("Shutting down...")
 }
 
-// restoreContainerStates starts containers that were running before reboot
+// restoreContainerStates syncs Caddy/SSHPiper configs for running containers
+// Note: Incus handles container auto-start via last-state behavior when boot.autostart is unset
 func restoreContainerStates(db *sql.DB) {
+	// Wait a bit for Incus to restore container states
+	time.Sleep(5 * time.Second)
+
 	// Get all containers from incus
 	out, err := exec.Command("incus", "list", "--format=json").Output()
 	if err != nil {
@@ -109,32 +113,16 @@ func restoreContainerStates(db *sql.DB) {
 			continue
 		}
 
-		// Check last_state.power from config
-		lastState := c.Config["volatile.last_state.power"]
 		currentStatus := strings.ToLower(c.Status)
+		fmt.Printf("Container %s: status=%s\n", c.Name, currentStatus)
 
-		fmt.Printf("Container %s: last_state=%s, current=%s\n", c.Name, lastState, currentStatus)
-
-		// If container was running before reboot but is now stopped, start it
-		if lastState == "RUNNING" && currentStatus == "stopped" {
-			fmt.Printf("Restoring %s to running state...\n", c.Name)
-			if err := exec.Command("incus", "start", c.Name).Run(); err != nil {
-				fmt.Fprintf(os.Stderr, "Failed to start %s: %v\n", c.Name, err)
-				continue
-			}
-			// Wait for it to get an IP
-			time.Sleep(3 * time.Second)
-		}
-
-		// Sync configs for running containers
-		if currentStatus == "running" || lastState == "RUNNING" {
+		// Sync configs for running containers (Incus handles starting them automatically)
+		if currentStatus == "running" {
 			syncContainerConfig(c.Name, domain, appPort)
 		}
 	}
 
-	// Reload caddy to pick up config changes
-	exec.Command("systemctl", "reload", "caddy").Run()
-	fmt.Println("State restoration complete")
+	fmt.Println("Config sync complete")
 }
 
 func monitorIncusEvents(db *sql.DB) {
