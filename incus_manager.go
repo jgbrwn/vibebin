@@ -376,12 +376,30 @@ func installSSHPiper() error {
 	io.Copy(f, resp.Body)
 	f.Close()
 
-	// Extract to /usr/local/bin
-	os.MkdirAll("/usr/local/bin", 0755)
-	if err := exec.Command("tar", "-xzf", tmpFile, "-C", "/usr/local/bin").Run(); err != nil {
+	// Extract to temp directory first
+	tmpDir := "/tmp/sshpiper-extract"
+	os.RemoveAll(tmpDir)
+	os.MkdirAll(tmpDir, 0755)
+	if err := exec.Command("tar", "-xzf", tmpFile, "-C", tmpDir).Run(); err != nil {
 		return err
 	}
+
+	// Copy main binary
+	os.MkdirAll("/usr/local/bin", 0755)
+	exec.Command("cp", tmpDir+"/sshpiperd", "/usr/local/bin/sshpiperd").Run()
 	os.Chmod("/usr/local/bin/sshpiperd", 0755)
+
+	// Copy plugins to /usr/local/bin so they're in PATH
+	plugins, _ := filepath.Glob(tmpDir + "/plugins/*")
+	for _, p := range plugins {
+		dest := "/usr/local/bin/" + filepath.Base(p)
+		exec.Command("cp", p, dest).Run()
+		os.Chmod(dest, 0755)
+	}
+
+	// Cleanup
+	os.RemoveAll(tmpDir)
+	os.Remove(tmpFile)
 
 	return nil
 }
