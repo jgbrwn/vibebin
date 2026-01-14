@@ -1436,6 +1436,10 @@ func updateCaddyConfig(name, domain, ip string, appPort int, authUser, authHash 
 	client := &http.Client{Timeout: 10 * time.Second}
 	caddyAPI := "http://localhost:2019"
 
+	// Remove default catch-all route if present (route at index 0 with no host matcher)
+	// This route from the default Caddyfile catches all requests before our host-specific routes
+	removeDefaultCatchAllRoute(client, caddyAPI)
+
 	// Delete existing routes for this container (if any)
 	deleteCaddyRoute(client, caddyAPI, name+"-app")
 	deleteCaddyRoute(client, caddyAPI, name+"-shelley")
@@ -1489,6 +1493,37 @@ func updateCaddyConfig(name, domain, ip string, appPort int, authUser, authHash 
 	}
 
 	return nil
+}
+
+// removeDefaultCatchAllRoute removes the default file_server route that has no host matcher
+// This route catches all requests and prevents our host-specific routes from working
+func removeDefaultCatchAllRoute(client *http.Client, caddyAPI string) {
+	// Get current routes
+	resp, err := client.Get(caddyAPI + "/config/apps/http/servers/srv0/routes")
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+
+	var routes []map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&routes); err != nil {
+		return
+	}
+
+	// Find and remove routes with no host matcher (catch-all routes)
+	// We iterate backwards to safely remove by index
+	for i := len(routes) - 1; i >= 0; i-- {
+		route := routes[i]
+		// Check if route has no "match" field or empty match (catches all)
+		if _, hasMatch := route["match"]; !hasMatch {
+			// This is a catch-all route, remove it by index
+			req, _ := http.NewRequest("DELETE", fmt.Sprintf("%s/config/apps/http/servers/srv0/routes/%d", caddyAPI, i), nil)
+			delResp, err := client.Do(req)
+			if err == nil {
+				delResp.Body.Close()
+			}
+		}
+	}
 }
 
 func addCaddyRoute(client *http.Client, caddyAPI string, route map[string]interface{}) error {
