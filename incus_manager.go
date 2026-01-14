@@ -70,6 +70,7 @@ const (
 	stateDNSTokens          // View/manage DNS API tokens
 	stateDNSTokenEdit       // Edit/add DNS token
 	stateCreating           // Container creation in progress
+	stateConfirmDelete      // Confirm container deletion
 )
 
 // DNS Provider types
@@ -132,6 +133,7 @@ type (
 	tickMsg            time.Time
 	shelleyUpdateMsg   struct{ output string; success bool }
 	createDoneMsg      struct{ err error; name string; output string }    // Container creation completed
+	clearStatusMsg     struct{}                                           // Clear status message
 )
 
 // TUI Model
@@ -222,6 +224,12 @@ func isVersionAtLeast(ver string, major, minor int) bool {
 		return true
 	}
 	return false
+}
+
+func clearStatusAfterDelay() tea.Cmd {
+	return tea.Tick(4*time.Second, func(t time.Time) tea.Msg {
+		return clearStatusMsg{}
+	})
 }
 
 func tickCmd() tea.Cmd {
@@ -867,7 +875,12 @@ func createContainerWithProgress(db *sql.DB, domain string, appPort int, sshKey 
 	sendProgress("Waiting for container to initialize...")
 	time.Sleep(5 * time.Second)
 
-	// STEP 4: Add SSH key to container
+	// STEP 4: Enable SSH service in container
+	sendProgress("Enabling SSH service...")
+	exec.Command("incus", "exec", name, "--", "systemctl", "unmask", "ssh", "ssh.socket").Run()
+	exec.Command("incus", "exec", name, "--", "systemctl", "enable", "--now", "ssh").Run()
+
+	// STEP 5: Add SSH key to container
 	if sshKey != "" {
 		sendProgress("Configuring SSH key...")
 		exec.Command("incus", "exec", name, "--", "mkdir", "-p", "/home/exedev/.ssh").Run()
@@ -886,7 +899,7 @@ func createContainerWithProgress(db *sql.DB, domain string, appPort int, sshKey 
 		exec.Command("incus", "exec", name, "--", "chmod", "600", "/home/exedev/.ssh/authorized_keys").Run()
 	}
 
-	// STEP 5: Get container IP
+	// STEP 6: Get container IP
 	sendProgress("Getting container IP address...")
 	_, ip, _, _ := getContainerStatus(name)
 	if ip != "" {
@@ -895,7 +908,7 @@ func createContainerWithProgress(db *sql.DB, domain string, appPort int, sshKey 
 		sendProgress("Warning: Could not get container IP yet")
 	}
 
-	// STEP 6: Hash password for Shelley auth
+	// STEP 7: Hash password for Shelley auth
 	sendProgress("Configuring authentication...")
 	authHash := ""
 	if authUser != "" && authPass != "" {
@@ -905,7 +918,7 @@ func createContainerWithProgress(db *sql.DB, domain string, appPort int, sshKey 
 		}
 	}
 
-	// STEP 7: Save to database
+	// STEP 8: Save to database
 	sendProgress("Saving to database...")
 	_, err = db.Exec("INSERT INTO containers (name, domain, app_port, auth_user, auth_hash, created_at) VALUES (?, ?, ?, ?, ?, datetime('now'))",
 		name, domain, appPort, authUser, authHash)
@@ -915,19 +928,19 @@ func createContainerWithProgress(db *sql.DB, domain string, appPort int, sshKey 
 		return fmt.Errorf("failed to save to database: %w", err)
 	}
 
-	// STEP 8: Configure Caddy reverse proxy
+	// STEP 9: Configure Caddy reverse proxy
 	sendProgress("Configuring Caddy reverse proxy...")
 	if ip != "" {
 		updateCaddyConfig(name, domain, ip, appPort, authUser, authHash)
 	}
 
-	// STEP 9: Configure SSHPiper
+	// STEP 10: Configure SSHPiper
 	sendProgress("Configuring SSH routing...")
 	if ip != "" {
 		configureSSHPiper(name, ip)
 	}
 
-	// STEP 10: Configure Shelley
+	// STEP 11: Configure Shelley
 	if modelIndex >= 0 && modelIndex < len(availableModels) {
 		sendProgress(fmt.Sprintf("Configuring Shelley with %s...", availableModels[modelIndex].Name))
 		configureShelley(name, modelIndex, apiKey)
@@ -1731,6 +1744,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Stay on creating screen so user can see the output
 		return m, nil
 
+	case clearStatusMsg:
+		m.status = ""
+		return m, nil
+
 	case tickMsg:
 		if m.state == stateList || m.state == stateContainerDetail {
 			return m, tea.Batch(m.refreshContainers(), tickCmd())
@@ -1820,6 +1837,26 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, nil
+	case stateConfirmDelete:
+		if len(m.containers) > 0 {
+			c := m.containers[m.cursor]
+			switch key {
+			case "y", "Y":
+				if err := deleteContainer(m.db, c.Name); err != nil {
+					m.status = "❌ Delete failed: " + err.Error()
+				} else {
+					m.status = "✅ Deleted " + c.Name
+					if m.cursor > 0 {
+						m.cursor--
+					}
+				}
+				m.state = stateList
+				return m, tea.Batch(m.refreshContainers(), clearStatusAfterDelay())
+			case "n", "N", "esc", "q":
+				m.state = stateList
+			}
+		}
+		return m, nil
 	case stateLogs:
 		// Any key returns to list
 		if key == "q" || key == "esc" {
@@ -1864,16 +1901,7 @@ func (m model) handleListKeys(key string) (tea.Model, tea.Cmd) {
 		}
 	case "x", "d":
 		if len(m.containers) > 0 {
-			c := m.containers[m.cursor]
-			if err := deleteContainer(m.db, c.Name); err != nil {
-				m.status = "Delete failed: " + err.Error()
-			} else {
-				m.status = "Deleted " + c.Name
-				if m.cursor > 0 {
-					m.cursor--
-				}
-			}
-			return m, m.refreshContainers()
+			m.state = stateConfirmDelete
 		}
 	case "i":
 		m.state = stateLogs
@@ -1910,17 +1938,26 @@ func (m model) handleDetailKeys(key string) (tea.Model, tea.Cmd) {
 	switch key {
 	case "s":
 		if c.Status == "running" {
-			stopContainer(c.Name)
-			m.status = "Stopping " + c.Name
+			if err := stopContainer(c.Name); err != nil {
+				m.status = "❌ Stop failed: " + err.Error()
+			} else {
+				m.status = "✅ Stopped " + c.Name
+			}
 		} else {
-			startContainer(m.db, c.Name)
-			m.status = "Starting " + c.Name
+			if err := startContainer(m.db, c.Name); err != nil {
+				m.status = "❌ Start failed: " + err.Error()
+			} else {
+				m.status = "✅ Started " + c.Name
+			}
 		}
-		return m, m.refreshContainers()
+		return m, tea.Batch(m.refreshContainers(), clearStatusAfterDelay())
 	case "r":
-		restartContainer(m.db, c.Name)
-		m.status = "Restarting " + c.Name
-		return m, m.refreshContainers()
+		if err := restartContainer(m.db, c.Name); err != nil {
+			m.status = "❌ Restart failed: " + err.Error()
+		} else {
+			m.status = "✅ Restarted " + c.Name
+		}
+		return m, tea.Batch(m.refreshContainers(), clearStatusAfterDelay())
 	case "p":
 		m.state = stateEditAppPort
 		m.textInput.Placeholder = "8000"
@@ -2622,6 +2659,13 @@ func (m model) View() string {
 		}
 		return s
 
+	case stateConfirmDelete:
+		if len(m.containers) > 0 && m.cursor < len(m.containers) {
+			c := m.containers[m.cursor]
+			return fmt.Sprintf("⚠️  DELETE CONTAINER\n\nAre you sure you want to delete '%s'?\n\nDomain: %s\nThis will remove:\n  - The container and all its data\n  - Caddy routes\n  - SSH routing\n\n[Y] Yes, delete  [N] No, cancel", c.Name, c.Domain)
+		}
+		return "No container selected"
+
 	case stateLogs:
 		return fmt.Sprintf("📜 LOGS: %s  [Esc] Back\n%s\n\n%s", m.currentSvc, strings.Repeat("─", 60), m.logContent)
 
@@ -2875,7 +2919,8 @@ func main() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGHUP, syscall.SIGTERM, syscall.SIGINT)
 
-	// Create the bubbletea program with options for better terminal handling
+	// Clear screen and create the bubbletea program with alternate screen
+	fmt.Print("\033[H\033[2J") // Clear screen
 	p := tea.NewProgram(initialModel(), tea.WithAltScreen())
 
 	// Handle signals in a goroutine
