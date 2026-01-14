@@ -351,11 +351,51 @@ Containers use Incus's default "last-state" behavior (by not setting `boot.autos
 
 Incus automatically tracks each container's power state and restores it when the daemon starts.
 
-## Limitations & Known Issues
+## Known Issues / What Doesn't Work Currently
+
+### Shelley Service Not Fully Functional
+
+While Caddy successfully proxies to the Shelley service inside containers (with working SSL certificates), the Shelley web interface currently shows an error:
+
+![Shelley conversations error](docs/images/shelley-conversations-error.png)
+
+**Status**: We are actively working on customizing the Shelley service configuration from the exeuntu image to work with our architecture. The issue involves:
+- Systemd socket activation configuration
+- API key environment variable passing to the shelley.service
+- Ensuring the correct models are available to the Shelley agent
+
+### Other Limitations
 
 - **IPv4 only**: IPv6 addresses not currently handled
 - **Single host**: No clustering support (single Incus host only)
 - **Two-part TLDs**: Domains like `.co.uk` need manual DNS setup (see below)
+
+## Roadmap
+
+### Storage Driver Selection
+
+Currently, this implementation uses the **Incus DIR storage driver** for proof of concept. The DIR driver uses basic filesystem-level storage and is:
+- Simple to set up (no additional dependencies)
+- Compatible with any filesystem
+- **Slow for snapshots** (full copy-on-write not available)
+
+**Planned**: During the dependencies/installation phase, users will be able to choose between:
+
+| Driver | Pros | Cons |
+|--------|------|------|
+| **DIR** | Simple, works everywhere | Slow snapshots, no CoW |
+| **Btrfs** | Fast snapshots, CoW, compression | Requires Btrfs filesystem |
+| **ZFS** | Fast snapshots, CoW, excellent features | Requires significant RAM (1GB+ per TB of storage) |
+
+Btrfs and ZFS provide instant snapshots via copy-on-write, making them much more suitable for production use.
+
+### Enhanced Authentication
+
+Currently, Shelley URLs are protected with Caddy's built-in HTTP Basic Auth. We plan to evaluate [caddy-security](https://github.com/greenpau/caddy-security) for more advanced authentication options including:
+- OAuth2/OIDC integration
+- Multi-factor authentication
+- Session management
+- API key authentication
 
 ## Troubleshooting
 
