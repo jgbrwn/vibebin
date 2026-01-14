@@ -345,11 +345,11 @@ The tool uses the Incus API (via `incus query` and JSON-formatted commands) as t
 
 ### Container Boot Behavior
 
-Containers are created with `boot.autostart=last-state`, which means:
+Containers use Incus's default "last-state" behavior (by not setting `boot.autostart`):
 - Running containers will restart when the host reboots
 - Stopped containers will stay stopped
 
-The `incus-startup.service` handles this at system boot.
+Incus automatically tracks each container's power state and restores it when the daemon starts.
 
 ## Limitations & Known Issues
 
