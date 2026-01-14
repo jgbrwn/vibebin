@@ -795,16 +795,45 @@ func createContainerWithProgress(db *sql.DB, domain string, appPort int, sshKey 
 		sendProgress("Creating DNS records...")
 		hostIP := getHostPublicIP()
 		if hostIP != "" {
+			sendProgress(fmt.Sprintf("Host IP: %s", hostIP))
+			
+			// Create main domain record
+			sendProgress(fmt.Sprintf("Creating A record for %s...", domain))
 			if err := createDNSRecord(domain, hostIP, dnsProvider, dnsToken, cfProxy); err != nil {
-				sendProgress(fmt.Sprintf("DNS warning: %v", err))
+				sendProgress(fmt.Sprintf("❌ DNS error for %s: %v", domain, err))
 			} else {
-				sendProgress(fmt.Sprintf("Created DNS record: %s -> %s", domain, hostIP))
+				sendProgress(fmt.Sprintf("✅ Created: %s -> %s", domain, hostIP))
 			}
-			// Also create shelley subdomain (never proxied - needs direct access)
-			createDNSRecord("shelley."+domain, hostIP, dnsProvider, dnsToken, false)
-			sendProgress(fmt.Sprintf("Created DNS record: shelley.%s -> %s", domain, hostIP))
+			
+			// Create shelley subdomain (never proxied - needs direct access)
+			shelleyDomain := "shelley." + domain
+			sendProgress(fmt.Sprintf("Creating A record for %s...", shelleyDomain))
+			if err := createDNSRecord(shelleyDomain, hostIP, dnsProvider, dnsToken, false); err != nil {
+				sendProgress(fmt.Sprintf("❌ DNS error for %s: %v", shelleyDomain, err))
+			} else {
+				sendProgress(fmt.Sprintf("✅ Created: %s -> %s", shelleyDomain, hostIP))
+			}
+			
+			// Wait for DNS propagation and verify
+			sendProgress("Waiting for DNS propagation (5s)...")
+			time.Sleep(5 * time.Second)
+			
+			// Verify DNS records
+			sendProgress("Verifying DNS records...")
+			mainOK := checkDNSResolvesToHost(domain)
+			shelleyOK := checkDNSResolvesToHost(shelleyDomain)
+			if mainOK {
+				sendProgress(fmt.Sprintf("✅ DNS verified: %s", domain))
+			} else {
+				sendProgress(fmt.Sprintf("⚠️ DNS not yet propagated: %s", domain))
+			}
+			if shelleyOK {
+				sendProgress(fmt.Sprintf("✅ DNS verified: %s", shelleyDomain))
+			} else {
+				sendProgress(fmt.Sprintf("⚠️ DNS not yet propagated: %s", shelleyDomain))
+			}
 		} else {
-			sendProgress("DNS warning: could not determine host public IP")
+			sendProgress("❌ Could not determine host public IP")
 		}
 	}
 
@@ -817,7 +846,7 @@ func createContainerWithProgress(db *sql.DB, domain string, appPort int, sshKey 
 	sendProgress("This may take a minute if the image needs to be downloaded...")
 	cmd := exec.Command("incus", "launch", ExeuntuImage, name,
 		"-c", "security.nesting=true",
-		"-c", "boot.autostart=last-state",
+		"-c", "boot.autostart=true",
 		"-c", "oci.entrypoint=/sbin/init")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -1014,8 +1043,8 @@ func importContainer(db *sql.DB, name, domain string, appPort int, authUser, aut
 		configureSSHPiper(name, ip)
 	}
 
-	// Set boot.autostart to last-state if not already set
-	exec.Command("incus", "config", "set", name, "boot.autostart=last-state").Run()
+	// Set boot.autostart=true if not already set
+	exec.Command("incus", "config", "set", name, "boot.autostart=true").Run()
 
 	// Configure Shelley (shelley.json and API key)
 	if modelIndex >= 0 && modelIndex < len(availableModels) {
