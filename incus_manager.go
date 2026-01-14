@@ -599,7 +599,7 @@ func (m *model) refreshContainers() tea.Cmd {
 			return containersMsg{}
 		}
 
-		rows, err := m.db.Query("SELECT id, name, domain, app_port, created_at FROM containers ORDER BY created_at DESC")
+		rows, err := m.db.Query("SELECT id, name, domain, app_port, COALESCE(created_at, datetime('now')) FROM containers ORDER BY created_at DESC")
 		if err != nil {
 			return containersMsg{}
 		}
@@ -612,7 +612,14 @@ func (m *model) refreshContainers() tea.Cmd {
 			if err := rows.Scan(&c.ID, &c.Name, &c.Domain, &c.AppPort, &createdAt); err != nil {
 				continue
 			}
-			c.CreatedAt, _ = time.Parse("2006-01-02 15:04:05", createdAt)
+			// Try multiple date formats
+			if t, err := time.Parse("2006-01-02 15:04:05", createdAt); err == nil {
+				c.CreatedAt = t
+			} else if t, err := time.Parse(time.RFC3339, createdAt); err == nil {
+				c.CreatedAt = t
+			} else {
+				c.CreatedAt = time.Now() // Fallback to now if parsing fails
+			}
 			c.Status, c.IP, c.CPU, c.Memory = getContainerStatus(c.Name)
 			containers = append(containers, c)
 		}
@@ -900,7 +907,7 @@ func createContainerWithProgress(db *sql.DB, domain string, appPort int, sshKey 
 
 	// STEP 7: Save to database
 	sendProgress("Saving to database...")
-	_, err = db.Exec("INSERT INTO containers (name, domain, app_port, auth_user, auth_hash) VALUES (?, ?, ?, ?, ?)",
+	_, err = db.Exec("INSERT INTO containers (name, domain, app_port, auth_user, auth_hash, created_at) VALUES (?, ?, ?, ?, ?, datetime('now'))",
 		name, domain, appPort, authUser, authHash)
 	if err != nil {
 		sendProgress("Database error, rolling back...")
@@ -2794,7 +2801,11 @@ func (m model) viewContainerDetail() string {
 	s += "\n"
 	s += fmt.Sprintf("  🌐 App URL:     https://%s\n", c.Domain)
 	s += fmt.Sprintf("  🤖 Shelley URL: https://shelley.%s\n", c.Domain)
-	s += fmt.Sprintf("  🔑 SSH:         ssh -p 2222 %s@<host> (via sshpiper)\n", c.Name)
+	hostIP := getHostPublicIP()
+	if hostIP == "" {
+		hostIP = "<host>"
+	}
+	s += fmt.Sprintf("  🔑 SSH:         ssh -p 2222 %s@%s\n", c.Name, hostIP)
 	s += "\n"
 	s += "───────────────────────────────────────────────────────────────────────────────\n"
 	s += "[s] Start/Stop  [r] Restart  [p] Change Port  [a] Change Auth\n"
