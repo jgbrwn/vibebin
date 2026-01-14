@@ -6,7 +6,7 @@ Create and host your vibe-coded apps on a single VPS/server.
 
 ## *UPFRONT DISCLOSURE*
 
-This project is 99.9% vibe-coded on the [exe.dev](https://exe.dev/docs/list) platform using their Shelley Web AI Coding Agent.
+This project is 99.9% vibe-coded on the [exe.dev](https://exe.dev/docs/list) platform using their Shelley Web AI Coding Agent and Claude Opus 4.5.
 Take that as you will.
 
 With that said, I am a huge proponent of the exe.dev platform, and if you can, you should definitely try it out and use their service.  The love and care for that project/service is extremely evident... AND it is incredibly awesome (and I think it's in its infancy stages, so should only get better).
