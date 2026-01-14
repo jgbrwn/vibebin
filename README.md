@@ -1,16 +1,29 @@
 # shelley-lxc | Incus Container Manager
 
-A self-hosted platform for running persistent, web-accessible development sandboxes powered by [Shelley](https://github.com/boldsoftware/shelley) AI coding agents.
+An Incus/LXC-based platform for self-hosting persistent [Shelley](https://github.com/boldsoftware/shelley) web-based AI coding agent sandboxes with Caddy reverse proxy and direct SSH routing to a container (suitable for VS Code remote ssh).
+
+Create and host your vibe-coded apps on a single VPS/server.
+
+## *UPFRONT DISCLOSURE*
+
+This project is 99.9% vibe-coded on the [exe.dev](https://exe.dev/docs/list) platform using their Shelley Web AI Coding Agent.
+Take that as you will.
+
+With that said, I am a huge proponent of the exe.dev platform, and if you can, you should definitely try it out and use their service.  The love and care for that project/service is extremely evident... AND it is incredibly awesome (and I think it's in its infancy stages, so should only get better).
+
+## *WARNING*
+
+This is extremely alpha software and a very new project.  Feel free to test and experiment but it's likely to have bugs and definitely not ready for production.  Use at your own risk.
 
 ## What is this?
 
-This project provides the infrastructure to self-host your own [exe.dev](https://exe.dev)-like environment on virtually any Linux server—VPS, cloud VM (EC2, GCP, Azure), or dedicated hardware. Because it uses **Incus/LXC** (container-based virtualization rather than nested VMs), it runs efficiently on KVM, VMware, Xen, Hyper-V, and most other hypervisors.
+This project provides the infrastructure to self-host your own [exe.dev](https://exe.dev/docs/list)-like environment on virtually any Linux server -- a VPS, cloud VM (EC2, GCP, Azure), or dedicated hardware. Because it uses **Incus/LXC** (container-based virtualization rather than nested VMs), it runs efficiently on KVM, VMware, Xen, Hyper-V, and most other hypervisors.
 
 Each container is a fully persistent Linux sandbox running the **exeuntu** OCI image (the same image used by exe.dev), with:
 
 - **Shelley web agent** accessible via HTTPS at `shelley.yourdomain.com` (protected by Caddy Basic Auth)
 - **Your app/site** accessible via HTTPS at `yourdomain.com`
-- **SSH access** for direct terminal access to your sandbox
+- **SSH access** for direct terminal access to your sandbox (suitable for VS Code (and forks) remote ssh)
 - **Persistent filesystem** that survives container restarts
 
 ### Use Cases
