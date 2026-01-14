@@ -538,6 +538,55 @@ func syncRunningContainers(db *sql.DB) {
 func setupCaddy() {
 	// Ensure Caddy is running (API-based config management)
 	exec.Command("systemctl", "enable", "--now", "caddy").Run()
+	
+	// Configure Caddy server with both HTTP and HTTPS listeners for automatic TLS
+	configureCaddyHTTPS()
+}
+
+func configureCaddyHTTPS() {
+	client := &http.Client{Timeout: 10 * time.Second}
+	caddyAPI := "http://localhost:2019"
+
+	// Check if server already has proper listen addresses
+	resp, err := client.Get(caddyAPI + "/config/apps/http/servers/srv0")
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+
+	var serverConfig map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&serverConfig); err != nil {
+		return
+	}
+
+	// Check if listen addresses include HTTPS (443)
+	listen, ok := serverConfig["listen"].([]interface{})
+	hasHTTPS := false
+	if ok {
+		for _, addr := range listen {
+			if addrStr, ok := addr.(string); ok && (strings.Contains(addrStr, ":443") || strings.Contains(addrStr, "https")) {
+				hasHTTPS = true
+				break
+			}
+		}
+	}
+
+	// If already configured with HTTPS, no changes needed
+	if hasHTTPS {
+		return
+	}
+
+	// Set up proper listen addresses for both HTTP and HTTPS
+	// This enables automatic HTTPS certificate provisioning
+	listenAddrs := []string{":80", ":443"}
+	body, _ := json.Marshal(listenAddrs)
+	req, _ := http.NewRequest("PATCH", caddyAPI+"/config/apps/http/servers/srv0/listen", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp2, err := client.Do(req)
+	if err != nil {
+		return
+	}
+	resp2.Body.Close()
 }
 
 func setupSSHPiperService() {
@@ -1761,7 +1810,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.status = "Shelley update failed"
 		}
-		return m, nil
+		return m, clearStatusAfterDelay()
 
 	case createDoneMsg:
 		m.createOutput = msg.output
@@ -1773,7 +1822,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.createOutput += "\n✅ Container created successfully!"
 		}
 		// Stay on creating screen so user can see the output
-		return m, nil
+		return m, clearStatusAfterDelay()
 
 	case clearStatusMsg:
 		m.status = ""
@@ -1790,11 +1839,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case errorMsg:
 		m.status = "Error: " + string(msg)
-		return m, nil
+		return m, clearStatusAfterDelay()
 
 	case successMsg:
 		m.status = string(msg)
-		return m, m.refreshContainers()
+		return m, tea.Batch(m.refreshContainers(), clearStatusAfterDelay())
 
 	case tea.KeyMsg:
 		// For text input states, update the text input first, then handle special keys
@@ -1948,6 +1997,7 @@ func (m model) handleListKeys(key string) (tea.Model, tea.Cmd) {
 		m.untrackedContainers = getUntrackedContainers(m.db)
 		if len(m.untrackedContainers) == 0 {
 			m.status = "No untracked containers found"
+			return m, clearStatusAfterDelay()
 		} else {
 			m.state = stateUntracked
 			m.cursor = 0
@@ -2011,7 +2061,7 @@ func (m model) handleDetailKeys(key string) (tea.Model, tea.Cmd) {
 		// Update shelley binary on container
 		if c.Status != "running" {
 			m.status = "Container must be running to update Shelley"
-			return m, nil
+			return m, clearStatusAfterDelay()
 		}
 		m.status = "Updating Shelley on " + c.Name + "..."
 		m.state = stateUpdateShelley
@@ -2043,11 +2093,11 @@ func (m model) handleInputKeys(key string) (tea.Model, tea.Cmd) {
 	case stateCreateDomain:
 		if val == "" {
 			m.status = "Domain cannot be empty"
-			return m, nil
+			return m, clearStatusAfterDelay()
 		}
 		if isDomainInUse(m.db, val) {
 			m.status = "Domain already in use"
-			return m, nil
+			return m, clearStatusAfterDelay()
 		}
 		m.newDomain = val
 		
@@ -2088,7 +2138,7 @@ func (m model) handleInputKeys(key string) (tea.Model, tea.Cmd) {
 	case stateCreateSSHKey:
 		if val == "" {
 			m.status = "SSH key required"
-			return m, nil
+			return m, clearStatusAfterDelay()
 		}
 		m.newSSHKey = val
 		m.state = stateCreateAuthUser
@@ -2098,7 +2148,7 @@ func (m model) handleInputKeys(key string) (tea.Model, tea.Cmd) {
 	case stateCreateAuthUser:
 		if val == "" {
 			m.status = "Username required for Shelley authentication"
-			return m, nil
+			return m, clearStatusAfterDelay()
 		}
 		m.newAuthUser = val
 		m.state = stateCreateAuthPass
@@ -2110,7 +2160,7 @@ func (m model) handleInputKeys(key string) (tea.Model, tea.Cmd) {
 	case stateCreateAuthPass:
 		if len(val) < 8 {
 			m.status = "Password must be at least 8 characters"
-			return m, nil
+			return m, clearStatusAfterDelay()
 		}
 		m.newAuthPass = val
 		m.textInput.EchoMode = textinput.EchoNormal
@@ -2122,7 +2172,7 @@ func (m model) handleInputKeys(key string) (tea.Model, tea.Cmd) {
 	case stateCreateAPIKey:
 		if val == "" {
 			m.status = "API key is required"
-			return m, nil
+			return m, clearStatusAfterDelay()
 		}
 		m.newAPIKey = val
 		m.createOutput = "Starting container creation...\n"
@@ -2144,12 +2194,12 @@ func (m model) handleInputKeys(key string) (tea.Model, tea.Cmd) {
 		}
 		m.state = stateContainerDetail
 		m.textInput.Reset()
-		return m, m.refreshContainers()
+		return m, tea.Batch(m.refreshContainers(), clearStatusAfterDelay())
 
 	case stateEditAuthUser:
 		if val == "" {
 			m.status = "Username cannot be empty"
-			return m, nil
+			return m, clearStatusAfterDelay()
 		}
 		m.newAuthUser = val
 		m.state = stateEditAuthPass
@@ -2161,7 +2211,7 @@ func (m model) handleInputKeys(key string) (tea.Model, tea.Cmd) {
 	case stateEditAuthPass:
 		if len(val) < 8 {
 			m.status = "Password must be at least 8 characters"
-			return m, nil
+			return m, clearStatusAfterDelay()
 		}
 		m.textInput.EchoMode = textinput.EchoNormal
 		if m.editingContainer != nil {
@@ -2174,12 +2224,12 @@ func (m model) handleInputKeys(key string) (tea.Model, tea.Cmd) {
 		}
 		m.state = stateContainerDetail
 		m.textInput.Reset()
-		return m, m.refreshContainers()
+		return m, tea.Batch(m.refreshContainers(), clearStatusAfterDelay())
 
 	case stateImportContainer:
 		if val == "" {
 			m.status = "Domain cannot be empty"
-			return m, nil
+			return m, clearStatusAfterDelay()
 		}
 		m.newDomain = val
 		
@@ -2197,7 +2247,7 @@ func (m model) handleInputKeys(key string) (tea.Model, tea.Cmd) {
 	case stateImportAuthUser:
 		if val == "" {
 			m.status = "Username required for Shelley authentication"
-			return m, nil
+			return m, clearStatusAfterDelay()
 		}
 		m.newAuthUser = val
 		m.state = stateImportAuthPass
@@ -2209,7 +2259,7 @@ func (m model) handleInputKeys(key string) (tea.Model, tea.Cmd) {
 	case stateImportAuthPass:
 		if len(val) < 8 {
 			m.status = "Password must be at least 8 characters"
-			return m, nil
+			return m, clearStatusAfterDelay()
 		}
 		m.newAuthPass = val
 		m.textInput.EchoMode = textinput.EchoNormal
@@ -2221,7 +2271,7 @@ func (m model) handleInputKeys(key string) (tea.Model, tea.Cmd) {
 	case stateImportAPIKey:
 		if val == "" {
 			m.status = "API key is required"
-			return m, nil
+			return m, clearStatusAfterDelay()
 		}
 		m.newAPIKey = val
 		if m.cursor < len(m.untrackedContainers) {
@@ -2235,7 +2285,7 @@ func (m model) handleInputKeys(key string) (tea.Model, tea.Cmd) {
 		}
 		m.state = stateList
 		m.textInput.Reset()
-		return m, m.refreshContainers()
+		return m, tea.Batch(m.refreshContainers(), clearStatusAfterDelay())
 	}
 	return m, nil
 }
@@ -2408,7 +2458,7 @@ func (m model) handleSnapshotCreateKeys(key string) (tea.Model, tea.Cmd) {
 	name := strings.TrimSpace(m.textInput.Value())
 	if name == "" {
 		m.status = "Snapshot name cannot be empty"
-		return m, nil
+		return m, clearStatusAfterDelay()
 	}
 
 	if m.editingContainer != nil {
@@ -2421,7 +2471,7 @@ func (m model) handleSnapshotCreateKeys(key string) (tea.Model, tea.Cmd) {
 	}
 	m.state = stateSnapshots
 	m.textInput.Reset()
-	return m, nil
+	return m, clearStatusAfterDelay()
 }
 
 func (m model) handleSnapshotConfirmKeys(key string) (tea.Model, tea.Cmd) {
@@ -2452,6 +2502,7 @@ func (m model) handleSnapshotConfirmKeys(key string) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.state = stateSnapshots
+		return m, clearStatusAfterDelay()
 	case "n", "N", "esc", "q":
 		m.state = stateSnapshots
 	}
@@ -2489,10 +2540,12 @@ func (m model) handleDNSTokensKeys(key string) (tea.Model, tea.Cmd) {
 		// Delete Cloudflare token
 		deleteDNSToken(m.db, dnsCloudflare)
 		m.status = "Cloudflare token deleted"
+		return m, clearStatusAfterDelay()
 	case "4":
 		// Delete deSEC token
 		deleteDNSToken(m.db, dnsDesec)
 		m.status = "deSEC token deleted"
+		return m, clearStatusAfterDelay()
 	}
 	return m, nil
 }
