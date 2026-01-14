@@ -1632,7 +1632,7 @@ func configureSSHPiper(name, ip, userPublicKey string) {
 	}
 }
 
-// configureShelley updates shelley.json, sets the API key in bashrc, and enables shelley.service
+// configureShelley updates shelley.json, sets the API key in bashrc, and enables shelley.socket
 func configureShelley(containerName string, modelIndex int, apiKey string) {
 	if modelIndex < 0 || modelIndex >= len(availableModels) {
 		return
@@ -1676,9 +1676,11 @@ func configureShelley(containerName string, modelIndex int, apiKey string) {
 		}
 	}
 
-	// Reload systemd and enable shelley.service
+	// Reload systemd and enable shelley.socket (not .service - socket activation triggers the service)
+	// The socket listens on the port and activates shelley.service when connections arrive
 	exec.Command("incus", "exec", containerName, "--", "systemctl", "daemon-reload").Run()
-	exec.Command("incus", "exec", containerName, "--", "systemctl", "enable", "--now", "shelley.service").Run()
+	exec.Command("incus", "exec", containerName, "--", "systemctl", "stop", "shelley.service").Run() // Stop if running directly
+	exec.Command("incus", "exec", containerName, "--", "systemctl", "enable", "--now", "shelley.socket").Run()
 
 	// Add API key to exedev's bashrc
 	exportLine := fmt.Sprintf("export %s='%s'", model.EnvVarName, apiKey)
