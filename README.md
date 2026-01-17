@@ -47,7 +47,7 @@ Each container is a fully persistent Linux sandbox running **Ubuntu 24.04 LTS** 
 
 ### shelley-cli
 
-This project uses [shelley-cli](https://github.com/davidcjones79/shelley-cli), a fork of [boldsoftware/shelley-cli](https://github.com/boldsoftware/shelley-cli) with additional features. shelley-cli is a terminal-based AI coding agent that supports multiple LLM providers:
+This project uses [shelley-cli](https://github.com/davidcjones79/shelley-cli), a fork of [boldsoftware/shelley-cli](https://github.com/boldsoftware/shelley-cli) with additional features. shelley-cli provides both a **terminal interface** and a **web UI** (on port 9999) for AI-assisted coding. It supports multiple LLM providers:
 
 - **Anthropic** (Claude models)
 - **OpenAI** (GPT models)
@@ -208,6 +208,7 @@ sudo incus_manager
 - `p` - Change app port
 - `a` - Change auth credentials
 - `S` - Snapshot management
+- `u` - Update shelley-cli
 - `Esc` - Back to list
 
 **Snapshot View:**
@@ -241,7 +242,15 @@ sudo incus_manager
 
 ## Using shelley-cli
 
-After creating a container, SSH in and run shelley-cli:
+After creating a container, you can access shelley-cli in two ways:
+
+### Web UI
+
+Access the web interface at `https://shelley.yourdomain.com` (protected by HTTP Basic Auth with the credentials you set during creation).
+
+### Terminal
+
+SSH in and run shelley-cli:
 
 ```bash
 # SSH to your container
@@ -252,6 +261,10 @@ shelley
 ```
 
 The API key you provided during container creation is already configured in `~/.bashrc`.
+
+### Updating shelley-cli
+
+From the container detail view, press `u` to update shelley-cli to the latest version. This will pull and rebuild from the repository.
 
 ### Using Custom API Endpoints
 
@@ -294,8 +307,9 @@ ssh user@host.example.com
 
 For HTTPS to work, DNS must point to the host server:
 - `domain.com` → Host IP
+- `shelley.domain.com` → Host IP (for shelley-cli web UI)
 
-Caddy will automatically obtain Let's Encrypt certificates.
+Caddy will automatically obtain Let's Encrypt certificates for both domains.
 
 ## Architecture
 
@@ -349,7 +363,8 @@ Caddy will automatically obtain Let's Encrypt certificates.
 ### How Traffic Flows
 
 1. **HTTPS requests** to `myapp.example.com` → Caddy → Container's app (port 8000)
-2. **SSH connections** to port 2222 as `myapp-example-com@host` → SSHPiper → Container's SSH as `ubuntu`/`debian`
+2. **HTTPS requests** to `shelley.myapp.example.com` → Caddy (with Basic Auth) → shelley-cli web UI (port 9999)
+3. **SSH connections** to port 2222 as `myapp-example-com@host` → SSHPiper → Container's SSH as `ubuntu`/`debian`
 
 ### Caddy Configuration
 

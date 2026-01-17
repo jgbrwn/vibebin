@@ -30,6 +30,7 @@ const (
 	DBPath         = "/var/lib/shelley/containers.db"
 	PIDFile        = "/var/run/incus_manager.pid"
 	DefaultAppPort = 8000
+	ShelleyPort    = 9999
 )
 
 // Container image options
@@ -43,11 +44,11 @@ const (
 func (i containerImage) String() string {
 	switch i {
 	case imageUbuntu:
-		return "images:ubuntu/24.04"
+		return "images:ubuntu/latest"
 	case imageDebian:
-		return "images:debian/12"
+		return "images:debian/latest"
 	}
-	return "images:ubuntu/24.04"
+	return "images:ubuntu/latest"
 }
 
 func (i containerImage) User() string {
@@ -63,11 +64,11 @@ func (i containerImage) User() string {
 func (i containerImage) DisplayName() string {
 	switch i {
 	case imageUbuntu:
-		return "Ubuntu 24.04 LTS"
+		return "Ubuntu (latest)"
 	case imageDebian:
-		return "Debian 12 (Bookworm)"
+		return "Debian (latest)"
 	}
-	return "Ubuntu 24.04 LTS"
+	return "Ubuntu (latest)"
 }
 
 // State machine for TUI
@@ -93,6 +94,7 @@ const (
 	stateEditAppPort
 	stateEditAuthUser
 	stateEditAuthPass
+	stateUpdateShelley  // Update shelley-cli binary
 	stateLogs
 	stateUntracked
 	stateImportContainer
@@ -166,8 +168,9 @@ type (
 	errorMsg           string
 	successMsg         string
 	tickMsg            time.Time
-	createDoneMsg      struct{ err error; name string; output string }    // Container creation completed
-	clearStatusMsg     struct{}                                           // Clear status message
+	createDoneMsg       struct{ err error; name string; output string }    // Container creation completed
+	clearStatusMsg      struct{}                                           // Clear status message
+	shelleyUpdateMsg    struct{ output string; success bool }              // shelley-cli update result
 )
 
 // TUI Model
@@ -181,6 +184,8 @@ type model struct {
 	logContent    string
 	currentSvc    string
 	missing       []string
+	updateOutput  string  // Output from shelley-cli update command
+	updateSuccess bool    // Whether shelley-cli update succeeded
 
 	// Create flow state
 	newDomain        string
@@ -897,16 +902,32 @@ func createContainerWithProgress(db *sql.DB, domain string, image containerImage
 				sendProgress(fmt.Sprintf("✅ Created: %s -> %s", domain, hostIP))
 			}
 			
+			// Create shelley subdomain (never proxied - needs direct access for websockets)
+			shelleyDomain := "shelley." + domain
+			sendProgress(fmt.Sprintf("Creating A record for %s...", shelleyDomain))
+			if err := createDNSRecord(shelleyDomain, hostIP, dnsProvider, dnsToken, false); err != nil {
+				sendProgress(fmt.Sprintf("❌ DNS error for %s: %v", shelleyDomain, err))
+			} else {
+				sendProgress(fmt.Sprintf("✅ Created: %s -> %s", shelleyDomain, hostIP))
+			}
+			
 			// Wait for DNS propagation and verify
 			sendProgress("Waiting for DNS propagation (5s)...")
 			time.Sleep(5 * time.Second)
 			
 			// Verify DNS records
 			sendProgress("Verifying DNS records...")
-			if checkDNSResolvesToHost(domain) {
+			mainOK := checkDNSResolvesToHost(domain)
+			shelleyOK := checkDNSResolvesToHost(shelleyDomain)
+			if mainOK {
 				sendProgress(fmt.Sprintf("✅ DNS verified: %s", domain))
 			} else {
 				sendProgress(fmt.Sprintf("⚠️ DNS not yet propagated: %s", domain))
+			}
+			if shelleyOK {
+				sendProgress(fmt.Sprintf("✅ DNS verified: %s", shelleyDomain))
+			} else {
+				sendProgress(fmt.Sprintf("⚠️ DNS not yet propagated: %s", shelleyDomain))
 			}
 		} else {
 			sendProgress("❌ Could not determine host public IP")
@@ -984,7 +1005,7 @@ func createContainerWithProgress(db *sql.DB, domain string, image containerImage
 	// STEP 10: Configure SSHPiper with key mapping
 	sendProgress("Configuring SSH routing...")
 	if ip != "" {
-		configureSSHPiper(name, ip, sshKey)
+		configureSSHPiper(name, ip, containerUser, sshKey)
 	}
 
 	sendProgress("Container creation complete!")
@@ -1065,8 +1086,11 @@ func checkDNSResolvesToHost(domain string) bool {
 }
 
 // checkAllDNSForDomain checks if the domain resolves correctly to the host IP
+// checkAllDNSForDomain checks both the main domain and shelley subdomain
 func checkAllDNSForDomain(domain string) bool {
-	return checkDNSResolvesToHost(domain)
+	mainOK := checkDNSResolvesToHost(domain)
+	shelleyOK := checkDNSResolvesToHost("shelley." + domain)
+	return mainOK && shelleyOK
 }
 
 // importContainer adds an existing Incus container to our management DB
@@ -1097,13 +1121,13 @@ func importContainer(db *sql.DB, name, domain string, image containerImage, appP
 	}
 
 	// Configure Caddy and SSHPiper
+	containerUser := image.User()
 	if ip != "" {
 		updateCaddyConfig(name, domain, ip, appPort, authUser, authHash)
-		configureSSHPiper(name, ip, sshKey)
+		configureSSHPiper(name, ip, containerUser, sshKey)
 	}
 
 	// Configure the container environment (user, Docker, Go, Node, shelley-cli)
-	containerUser := image.User()
 	silentProgress := func(msg string) {} // Silent for imports
 	configureContainerEnvironment(name, containerUser, providerIndex, apiKey, baseURL, sshKey, silentProgress)
 
@@ -1445,6 +1469,7 @@ func updateCaddyConfig(name, domain, ip string, appPort int, authUser, authHash 
 
 	// Delete existing routes for this container (if any)
 	deleteCaddyRoute(client, caddyAPI, name+"-app")
+	deleteCaddyRoute(client, caddyAPI, name+"-shelley")
 
 	// Add app route (public access to the container's app)
 	appRoute := map[string]interface{}{
@@ -1459,8 +1484,40 @@ func updateCaddyConfig(name, domain, ip string, appPort int, authUser, authHash 
 		return fmt.Errorf("failed to add app route: %w", err)
 	}
 
-	// Note: shelley-cli is a terminal-based tool, no web interface needed
-	// Users access it via SSH: ssh -p 2222 container-name@host
+	// Build shelley-cli web UI route handlers
+	var shelleyHandlers []map[string]interface{}
+
+	// Add basic auth handler if credentials are set
+	if authUser != "" && authHash != "" {
+		authHandler := map[string]interface{}{
+			"handler": "authentication",
+			"providers": map[string]interface{}{
+				"http_basic": map[string]interface{}{
+					"accounts": []map[string]string{{
+						"username": authUser,
+						"password": authHash,
+					}},
+					"realm": "Shelley",
+				},
+			},
+		}
+		shelleyHandlers = append(shelleyHandlers, authHandler)
+	}
+
+	// Add reverse proxy handler for shelley-cli web UI
+	shelleyHandlers = append(shelleyHandlers, map[string]interface{}{
+		"handler":   "reverse_proxy",
+		"upstreams": []map[string]string{{"dial": fmt.Sprintf("%s:%d", ip, ShelleyPort)}},
+	})
+
+	shelleyRoute := map[string]interface{}{
+		"@id":   name + "-shelley",
+		"match": []map[string]interface{}{{"host": []string{"shelley." + domain}}},
+		"handle": shelleyHandlers,
+	}
+	if err := addCaddyRoute(client, caddyAPI, shelleyRoute); err != nil {
+		return fmt.Errorf("failed to add shelley route: %w", err)
+	}
 
 	return nil
 }
@@ -1527,6 +1584,7 @@ func removeCaddyConfig(name string) {
 	client := &http.Client{Timeout: 10 * time.Second}
 	caddyAPI := "http://localhost:2019"
 	deleteCaddyRoute(client, caddyAPI, name+"-app")
+	deleteCaddyRoute(client, caddyAPI, name+"-shelley")
 }
 
 func updateContainerAppPort(db *sql.DB, name string, newPort int) error {
@@ -1589,12 +1647,12 @@ func updateSSHPiperUpstream(name, ip string) {
 }
 
 // configureSSHPiper sets up full SSHPiper config including key mapping for public key auth
-func configureSSHPiper(name, ip, userPublicKey string) {
+func configureSSHPiper(name, ip, containerUser, userPublicKey string) {
 	pDir := filepath.Join(SSHPiperRoot, name)
 	os.MkdirAll(pDir, 0700)
 	
-	// Map to exedev user on container
-	os.WriteFile(filepath.Join(pDir, "sshpiper_upstream"), []byte("exedev@"+ip+":22\n"), 0600)
+	// Map to container user (ubuntu or debian)
+	os.WriteFile(filepath.Join(pDir, "sshpiper_upstream"), []byte(containerUser+"@"+ip+":22\n"), 0600)
 	
 	// For public key auth, SSHPiper needs:
 	// 1. authorized_keys - client's public key (to verify incoming connection)
@@ -1616,23 +1674,24 @@ func configureSSHPiper(name, ip, userPublicKey string) {
 	}
 	
 	// Push the mapping public key to the container
+	userHome := "/home/" + containerUser
 	if pubKey, err := os.ReadFile(idRsaPubPath); err == nil {
 		// Create .ssh directory on container
-		exec.Command("incus", "exec", name, "--", "mkdir", "-p", "/home/exedev/.ssh").Run()
+		exec.Command("incus", "exec", name, "--", "mkdir", "-p", userHome+"/.ssh").Run()
 		
 		// Write mapping public key to container's authorized_keys
 		tmpFile, err := os.CreateTemp("", "sshpiper_pubkey")
 		if err == nil {
 			tmpFile.Write(pubKey)
 			tmpFile.Close()
-			exec.Command("incus", "file", "push", tmpFile.Name(), name+"/home/exedev/.ssh/authorized_keys").Run()
+			exec.Command("incus", "file", "push", tmpFile.Name(), name+userHome+"/.ssh/authorized_keys").Run()
 			os.Remove(tmpFile.Name())
 		}
 		
 		// Set correct permissions
-		exec.Command("incus", "exec", name, "--", "chown", "-R", "exedev:exedev", "/home/exedev/.ssh").Run()
-		exec.Command("incus", "exec", name, "--", "chmod", "700", "/home/exedev/.ssh").Run()
-		exec.Command("incus", "exec", name, "--", "chmod", "600", "/home/exedev/.ssh/authorized_keys").Run()
+		exec.Command("incus", "exec", name, "--", "chown", "-R", containerUser+":"+containerUser, userHome+"/.ssh").Run()
+		exec.Command("incus", "exec", name, "--", "chmod", "700", userHome+"/.ssh").Run()
+		exec.Command("incus", "exec", name, "--", "chmod", "600", userHome+"/.ssh/authorized_keys").Run()
 	}
 }
 
@@ -1851,6 +1910,37 @@ func streamLogsCmd(service string) tea.Cmd {
 	}
 }
 
+// updateShelleyCmd updates shelley-cli on a container by rebuilding from source
+func updateShelleyCmd(containerName, containerUser string) tea.Cmd {
+	return func() tea.Msg {
+		// The update commands to run on the container as the container user
+		updateScript := `
+set -e
+export PATH=$PATH:/usr/local/go/bin:$HOME/go/bin
+cd ~
+rm -rf shelley-cli
+git clone https://github.com/davidcjones79/shelley-cli.git
+cd shelley-cli
+make
+echo "shelley-cli updated successfully!"
+`
+		// Run as container user
+		cmd := exec.Command("incus", "exec", containerName, "--", "su", "-", containerUser, "-c", updateScript)
+		output, err := cmd.CombinedOutput()
+
+		result := string(output)
+		success := err == nil
+
+		if success {
+			result += "\n\n✅ shelley-cli updated successfully!"
+		} else {
+			result += fmt.Sprintf("\n\n❌ Update failed: %v", err)
+		}
+
+		return shelleyUpdateMsg{output: result, success: success}
+	}
+}
+
 // TUI Update method
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -1886,6 +1976,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case logMsg:
 		m.logContent = string(msg)
 		return m, nil
+
+	case shelleyUpdateMsg:
+		m.updateOutput = msg.output
+		m.updateSuccess = msg.success
+		if msg.success {
+			m.status = "shelley-cli updated successfully"
+		} else {
+			m.status = "shelley-cli update failed"
+		}
+		return m, clearStatusAfterDelay()
 
 	case createDoneMsg:
 		m.createOutput = msg.output
@@ -2022,7 +2122,12 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.state = stateList
 			return m, m.refreshContainers()
 		}
-
+	case stateUpdateShelley:
+		// Esc returns to container detail
+		if key == "q" || key == "esc" {
+			m.state = stateContainerDetail
+			return m, m.refreshContainers()
+		}
 	}
 	return m, nil
 }
@@ -2137,6 +2242,19 @@ func (m model) handleDetailKeys(key string) (tea.Model, tea.Cmd) {
 		m.snapshotCursor = 0
 		m.state = stateSnapshots
 		return m, nil
+	case "u":
+		// Update shelley-cli on container
+		if c.Status != "running" {
+			m.status = "Container must be running to update shelley-cli"
+			return m, clearStatusAfterDelay()
+		}
+		m.status = "Updating shelley-cli on " + c.Name + "..."
+		m.state = stateUpdateShelley
+		m.updateOutput = "Updating shelley-cli...\n"
+		m.updateSuccess = false
+		// Determine container user from image (we'll need to get this from DB or assume ubuntu for now)
+		containerUser := "ubuntu" // Default assumption
+		return m, updateShelleyCmd(c.Name, containerUser)
 	case "q", "esc":
 		m.state = stateList
 		m.editingContainer = nil
@@ -2715,11 +2833,17 @@ func (m model) View() string {
 
 	case stateCreateDNSProvider:
 		// Show current DNS status
-		dnsStatus := "⚠ DNS not configured (A record needed)"
-		if checkDNSResolvesToHost(m.newDomain) {
+		dnsStatus := "⚠ DNS not configured (A records needed)"
+		mainOK := checkDNSResolvesToHost(m.newDomain)
+		shelleyOK := checkDNSResolvesToHost("shelley." + m.newDomain)
+		if mainOK && shelleyOK {
 			dnsStatus = "✅ DNS already configured correctly"
+		} else if mainOK {
+			dnsStatus = "⚠ Main domain OK, shelley." + m.newDomain + " not configured"
+		} else if shelleyOK {
+			dnsStatus = "⚠ shelley subdomain OK, main domain not configured"
 		}
-		return fmt.Sprintf("📦 CREATE: %s\n\n%s\n\nAuto-create DNS record?\n\n[1] No - I'll configure DNS manually\n[2] Cloudflare\n[3] deSEC\n\n[Esc] Cancel", m.newDomain, dnsStatus)
+		return fmt.Sprintf("📦 CREATE: %s\n\n%s\n\nAuto-create DNS records?\n\n[1] No - I'll configure DNS manually\n[2] Cloudflare\n[3] deSEC\n\n[Esc] Cancel", m.newDomain, dnsStatus)
 
 	case stateCreateCFProxy:
 		return fmt.Sprintf("📦 CREATE: %s\n\nEnable Cloudflare proxy (orange cloud)?\n\n[1] No  - DNS only (recommended for SSH/non-HTTP)\n[2] Yes - Proxy through Cloudflare (HTTP/HTTPS only)\n\n[Esc] Cancel", m.newDomain)
@@ -2775,6 +2899,24 @@ func (m model) View() string {
 			containerName = m.editingContainer.Name
 		}
 		return fmt.Sprintf("🔐 EDIT SHELLEY AUTH: %s\n\nNew password (min 8 chars):\n\n%s\n\n[Enter] Save  [Esc] Cancel", containerName, m.textInput.View())
+
+	case stateUpdateShelley:
+		containerName := ""
+		if m.editingContainer != nil {
+			containerName = m.editingContainer.Name
+		}
+		statusIcon := "🔄"
+		if m.updateSuccess {
+			statusIcon = "✅"
+		} else if strings.Contains(m.updateOutput, "failed") {
+			statusIcon = "❌"
+		}
+		s := fmt.Sprintf("%s UPDATE SHELLEY-CLI: %s\n", statusIcon, containerName)
+		s += "═══════════════════════════════════════════════════════════════════════════════\n\n"
+		s += m.updateOutput
+		s += "\n\n───────────────────────────────────────────────────────────────────────────────\n"
+		s += "[Esc] Back to container details\n"
+		return s
 
 	case stateUntracked:
 		return m.viewUntracked()
@@ -2894,8 +3036,8 @@ func (m model) viewImageSelect(title string) string {
 	s := fmt.Sprintf("📦 %s\n", title)
 	s += "═══════════════════════════════════════════════════════════════════════════════\n\n"
 	s += "Select container base image:\n\n"
-	s += "  [1] Ubuntu 24.04 LTS  (recommended)\n"
-	s += "  [2] Debian 12 (Bookworm)\n"
+	s += "  [1] Ubuntu (latest)  - recommended\n"
+	s += "  [2] Debian (latest)\n"
 	s += "\n───────────────────────────────────────────────────────────────────────────────\n"
 	s += "[1/2] Select  [Esc] Cancel\n"
 	return s
@@ -3059,16 +3201,16 @@ func (m model) viewContainerDetail() string {
 	s += fmt.Sprintf("  Created:      %s\n", c.CreatedAt.Format("2006-01-02 15:04:05"))
 	s += "\n"
 	s += fmt.Sprintf("  🌐 App URL:     https://%s\n", c.Domain)
+	s += fmt.Sprintf("  🤖 Shelley URL: https://shelley.%s\n", c.Domain)
 	hostIP := getHostPublicIP()
 	if hostIP == "" {
 		hostIP = "<host>"
 	}
 	s += fmt.Sprintf("  🔑 SSH:         ssh -p 2222 %s@%s\n", c.Name, hostIP)
-	s += fmt.Sprintf("  🤖 shelley-cli: ssh -p 2222 %s@%s  then run 'shelley'\n", c.Name, hostIP)
 	s += "\n"
 	s += "───────────────────────────────────────────────────────────────────────────────\n"
 	s += "[s] Start/Stop  [r] Restart  [p] Change Port  [a] Change Auth\n"
-	s += "[S] Snapshots   [Esc] Back\n"
+	s += "[S] Snapshots   [u] Update shelley-cli  [Esc] Back\n"
 
 	if m.status != "" {
 		s += "\n📋 " + m.status
