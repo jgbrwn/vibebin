@@ -1723,13 +1723,18 @@ func configureSSHPiper(name, ip, containerUser, userPublicKey string) {
 		// Create .ssh directory on container if it doesn't exist
 		exec.Command("incus", "exec", name, "--", "mkdir", "-p", userHome+"/.ssh").Run()
 		
-		// Append mapping public key to container's authorized_keys
-		// Use a script to append if not already present
-		pubKeyStr := strings.TrimSpace(string(pubKey))
-		appendScript := fmt.Sprintf(`
-grep -qF '%s' %s/.ssh/authorized_keys 2>/dev/null || echo '%s' >> %s/.ssh/authorized_keys
-`, pubKeyStr, userHome, pubKeyStr, userHome)
-		exec.Command("incus", "exec", name, "--", "sh", "-c", appendScript).Run()
+		// Write mapping public key to a temp file and append to authorized_keys
+		tmpPubKey, err := os.CreateTemp("", "sshpiper_pubkey")
+		if err == nil {
+			tmpPubKey.Write(pubKey)
+			tmpPubKey.Close()
+			// Push to container
+			exec.Command("incus", "file", "push", tmpPubKey.Name(), name+"/tmp/sshpiper_mapping_key.pub").Run()
+			os.Remove(tmpPubKey.Name())
+			// Append to authorized_keys if not already present
+			appendCmd := fmt.Sprintf("cat /tmp/sshpiper_mapping_key.pub >> %s/.ssh/authorized_keys && rm /tmp/sshpiper_mapping_key.pub", userHome)
+			exec.Command("incus", "exec", name, "--", "sh", "-c", appendCmd).Run()
+		}
 		
 		// Set correct permissions
 		exec.Command("incus", "exec", name, "--", "chown", "-R", containerUser+":"+containerUser, userHome+"/.ssh").Run()
@@ -1854,21 +1859,27 @@ echo "Node.js $(node --version) installed successfully"
 
 	// STEP 6: Install shelley-cli
 	sendProgress("Installing shelley-cli...")
-	shelleyInstallScript := `
+	shelleyInstallScript := fmt.Sprintf(`
+set -ex
 export PATH=$PATH:/usr/local/go/bin
-cd ~
+cd /home/%s
 rm -rf shelley-cli
 git clone https://github.com/davidcjones79/shelley-cli.git
 cd shelley-cli
 make
-`
+# Copy binary to go/bin so it's in PATH
+mkdir -p /home/%s/go/bin
+cp bin/shelley /home/%s/go/bin/
+chown %s:%s /home/%s/go/bin/shelley
+echo "shelley-cli installed successfully"
+`, containerUser, containerUser, containerUser, containerUser, containerUser, containerUser)
 	tmpShelleyScript, _ := os.CreateTemp("", "install-shelley.sh")
 	tmpShelleyScript.WriteString(shelleyInstallScript)
 	tmpShelleyScript.Close()
 	exec.Command("incus", "file", "push", tmpShelleyScript.Name(), containerName+"/tmp/install-shelley.sh").Run()
 	os.Remove(tmpShelleyScript.Name())
 	rootExec("chmod", "+x", "/tmp/install-shelley.sh")
-	userExec("/tmp/install-shelley.sh")
+	rootExec("/tmp/install-shelley.sh") // Run as root so we can set ownership
 
 	// STEP 7: Configure API key and base URL in bashrc
 	sendProgress("Configuring LLM provider credentials...")
