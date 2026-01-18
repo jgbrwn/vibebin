@@ -126,16 +126,32 @@ go build -o incus_sync_daemon incus_sync_daemon.go
 # Install binaries
 sudo cp incus_manager incus_sync_daemon /usr/local/bin/
 
-## TO UPGRADE AN EXISTING INSTALLATION ##
-sudo systemctl stop incus-sync
+```
 
+### Upgrading an Existing Installation
+
+Use the upgrade script for a quick one-liner upgrade:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/jgbrwn/shelley-lxc/main/upgrade.sh | bash
+```
+
+Or to upgrade to a specific branch:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/jgbrwn/shelley-lxc/main/upgrade.sh | bash -s -- native_incus_containers
+```
+
+Alternatively, run the upgrade manually:
+
+```bash
+sudo systemctl stop incus-sync
 rm -rf shelley-lxc
 git clone https://github.com/jgbrwn/shelley-lxc.git
 cd shelley-lxc
 go build -o incus_manager incus_manager.go
 go build -o incus_sync_daemon incus_sync_daemon.go
 sudo cp incus_manager incus_sync_daemon /usr/local/bin/
-
 sudo systemctl start incus-sync
 ```
 
