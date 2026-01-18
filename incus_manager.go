@@ -1887,13 +1887,37 @@ mkdir -p /home/%s/go/bin
 cp bin/shelley /home/%s/go/bin/
 chown %s:%s /home/%s/go/bin/shelley
 
-# Install igor.service for file upload on port 8099
-cp /home/%s/shelley-cli/igor.service /etc/systemd/system/
+# Create igor.service with correct user (not exedev)
+cat > /etc/systemd/system/igor.service << 'IGOREOF'
+[Unit]
+Description=Igor - Shelley File Transfer Assistant
+After=network.target
+
+[Service]
+Type=exec
+User=%s
+Group=%s
+WorkingDirectory=/home/%s
+ExecStart=/home/%s/go/bin/shelley igor -port 8099
+Restart=on-failure
+RestartSec=5
+Environment=HOME=/home/%s
+Environment=USER=%s
+Environment=PATH=/usr/local/bin:/usr/bin:/bin:/home/%s/go/bin
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=igor
+
+[Install]
+WantedBy=multi-user.target
+IGOREOF
+
 systemctl daemon-reload
 systemctl enable --now igor
 
 echo "shelley-cli and igor service installed successfully"
-`, containerUser, containerUser, containerUser, containerUser, containerUser, containerUser, containerUser)
+`, containerUser, containerUser, containerUser, containerUser, containerUser, containerUser, containerUser, containerUser, containerUser, containerUser, containerUser, containerUser, containerUser, containerUser)
 	tmpShelleyScript, _ := os.CreateTemp("", "install-shelley.sh")
 	tmpShelleyScript.WriteString(shelleyInstallScript)
 	tmpShelleyScript.Close()
@@ -2008,7 +2032,7 @@ exec bash
 	startScreenScript := fmt.Sprintf(`
 export PATH=$PATH:/usr/local/go/bin:$HOME/go/bin
 cd ~
-screen -dmS shelley %s/shelley-launcher.sh
+screen -dmS shelley bash -c '%s/shelley-launcher.sh; exec bash'
 sleep 3
 screen -ls | grep shelley | awk '{print $1}'
 `, userHome)
@@ -2111,13 +2135,37 @@ make
 cp bin/shelley %s/go/bin/
 chown %s:%s %s/go/bin/shelley
 
-# Update igor.service
-cp %s/shelley-cli/igor.service /etc/systemd/system/
+# Update igor.service with correct user
+cat > /etc/systemd/system/igor.service << 'IGOREOF'
+[Unit]
+Description=Igor - Shelley File Transfer Assistant
+After=network.target
+
+[Service]
+Type=exec
+User=%s
+Group=%s
+WorkingDirectory=/home/%s
+ExecStart=/home/%s/go/bin/shelley igor -port 8099
+Restart=on-failure
+RestartSec=5
+Environment=HOME=/home/%s
+Environment=USER=%s
+Environment=PATH=/usr/local/bin:/usr/bin:/bin:/home/%s/go/bin
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=igor
+
+[Install]
+WantedBy=multi-user.target
+IGOREOF
+
 systemctl daemon-reload
 systemctl enable --now igor
 
 echo "shelley-cli and igor service updated successfully!"
-`, userHome, userHome, containerUser, containerUser, userHome, userHome)
+`, userHome, userHome, containerUser, containerUser, userHome, containerUser, containerUser, userHome, containerUser, userHome, containerUser, containerUser, userHome)
 		
 		// Run update as root
 		updateCmd := exec.Command("incus", "exec", containerName, "--", "sh", "-c", updateScript)
@@ -2133,7 +2181,7 @@ echo "shelley-cli and igor service updated successfully!"
 		restartScript := fmt.Sprintf(`
 export PATH=$PATH:/usr/local/go/bin:%s/go/bin
 cd %s
-screen -dmS shelley %s/shelley-launcher.sh
+screen -dmS shelley bash -c '%s/shelley-launcher.sh; exec bash'
 sleep 3
 SESSION=$(screen -ls | grep shelley | awk '{print $1}')
 echo "shelley serve restarted in screen session: $SESSION"
