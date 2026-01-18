@@ -1552,9 +1552,10 @@ func updateCaddyConfig(name, domain, ip string, appPort int, authUser, authHash 
 	}
 
 	// Add rewrite handler to strip /upload prefix before proxying
+	// Use uri with strip_prefix to remove /upload from the path
 	uploadHandlers = append(uploadHandlers, map[string]interface{}{
-		"handler": "rewrite",
-		"strip_path_prefix": "/upload",
+		"handler":      "rewrite",
+		"strip_prefix": "/upload",
 	})
 
 	// Add reverse proxy handler for Igor upload service
@@ -2000,7 +2001,7 @@ echo "  Installed Tools:"
 echo "    • Docker      $(docker --version 2>/dev/null | awk '{print $3}' | tr -d ',' || echo 'not found')"
 echo "    • Go          $(go version 2>/dev/null | awk '{print $3}' | sed 's/go//' || echo 'not found')"
 echo "    • Node.js     $(node --version 2>/dev/null || echo 'not found')"
-echo "    • shelley-cli $(~/go/bin/shelley version 2>/dev/null | grep -o '"version":"[^"]*"' | cut -d'"' -f4 || echo 'installed')"
+echo "    • shelley-cli $(~/go/bin/shelley version 2>/dev/null | grep -o '"commit":"[^"]*"' | cut -d'"' -f4 | cut -c1-8 || echo 'installed')"
 echo ""
 echo "  ─────────────────────────────────────────────────────────────────────────────"
 echo "  shelley serve Status:"

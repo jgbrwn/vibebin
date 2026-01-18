@@ -23,6 +23,7 @@ const (
 	SSHPiperRoot = "/var/lib/sshpiper"
 	DBPath       = "/var/lib/shelley/containers.db"
 	ShelleyPort  = 9999
+	UploadPort   = 8099
 )
 
 type lifecycleEvent struct {
@@ -200,10 +201,20 @@ func syncContainerConfig(name, domain string, appPort int) {
 	// Update Caddy config via API
 	updateCaddyRoutes(name, domain, ip, appPort)
 
-	// Update SSHPiper config - map to exedev user on container
+	// Update SSHPiper config - preserve existing username from upstream file
 	pDir := filepath.Join(SSHPiperRoot, name)
 	os.MkdirAll(pDir, 0700)
-	os.WriteFile(filepath.Join(pDir, "sshpiper_upstream"), []byte("exedev@"+ip+":22\n"), 0600)
+	
+	// Read existing upstream to get username
+	upstreamPath := filepath.Join(pDir, "sshpiper_upstream")
+	username := "ubuntu" // default
+	if existing, err := os.ReadFile(upstreamPath); err == nil {
+		parts := strings.SplitN(string(existing), "@", 2)
+		if len(parts) > 0 && parts[0] != "" {
+			username = strings.TrimSpace(parts[0])
+		}
+	}
+	os.WriteFile(upstreamPath, []byte(username+"@"+ip+":22\n"), 0600)
 }
 
 func updateCaddyRoutes(name, domain, ip string, appPort int) {
@@ -213,6 +224,7 @@ func updateCaddyRoutes(name, domain, ip string, appPort int) {
 	// Delete existing routes
 	deleteCaddyRoute(client, caddyAPI, name+"-app")
 	deleteCaddyRoute(client, caddyAPI, name+"-shelley")
+	deleteCaddyRoute(client, caddyAPI, name+"-upload")
 
 	// Add app route
 	appRoute := map[string]interface{}{
@@ -235,6 +247,26 @@ func updateCaddyRoutes(name, domain, ip string, appPort int) {
 		}},
 	}
 	addCaddyRoute(client, caddyAPI, shelleyRoute)
+
+	// Add upload route with path rewrite
+	uploadRoute := map[string]interface{}{
+		"@id": name + "-upload",
+		"match": []map[string]interface{}{{
+			"host": []string{"shelley." + domain},
+			"path": []string{"/upload", "/upload/*"},
+		}},
+		"handle": []map[string]interface{}{
+			{
+				"handler":      "rewrite",
+				"strip_prefix": "/upload",
+			},
+			{
+				"handler":   "reverse_proxy",
+				"upstreams": []map[string]string{{"dial": fmt.Sprintf("%s:%d", ip, UploadPort)}},
+			},
+		},
+	}
+	addCaddyRoute(client, caddyAPI, uploadRoute)
 }
 
 func addCaddyRoute(client *http.Client, caddyAPI string, route map[string]interface{}) {
@@ -263,6 +295,7 @@ func removeCaddyRoutes(name string) {
 	caddyAPI := "http://localhost:2019"
 	deleteCaddyRoute(client, caddyAPI, name+"-app")
 	deleteCaddyRoute(client, caddyAPI, name+"-shelley")
+	deleteCaddyRoute(client, caddyAPI, name+"-upload")
 }
 
 func getContainerStatus(name string) (status, ip string) {
@@ -277,12 +310,24 @@ func getContainerStatus(name string) (status, ip string) {
 	}
 
 	status = strings.ToLower(list[0].Status)
-	for _, net := range list[0].State.Network {
+	// Get IP - prefer eth0, skip localhost and docker bridge networks
+	for netName, net := range list[0].State.Network {
 		for _, addr := range net.Addresses {
-			if addr.Family == "inet" && !strings.HasPrefix(addr.Address, "127.") {
-				ip = addr.Address
-				break
+			if addr.Family == "inet" &&
+				!strings.HasPrefix(addr.Address, "127.") &&
+				!strings.HasPrefix(addr.Address, "172.17.") &&
+				!strings.HasPrefix(addr.Address, "172.18.") {
+				// Prefer eth0 over other interfaces
+				if netName == "eth0" {
+					ip = addr.Address
+					break
+				} else if ip == "" {
+					ip = addr.Address
+				}
 			}
+		}
+		if ip != "" && netName == "eth0" {
+			break
 		}
 	}
 	return status, ip
