@@ -960,7 +960,7 @@ func createContainerWithProgress(db *sql.DB, domain string, image containerImage
 	// STEP 4: Configure the container user and install dependencies
 	sendProgress("Configuring container user and installing dependencies...")
 	containerUser := image.User()
-	screenSessionID, err := configureContainerEnvironment(name, containerUser, providerIndex, apiKey, baseURL, sshKey, sendProgress)
+	screenSessionID, err := configureContainerEnvironment(name, containerUser, domain, providerIndex, apiKey, baseURL, sshKey, sendProgress)
 	if err != nil {
 		sendProgress(fmt.Sprintf("Warning: Some configuration steps failed: %v", err))
 	}
@@ -1132,7 +1132,7 @@ func importContainer(db *sql.DB, name, domain string, image containerImage, appP
 
 	// Configure the container environment (user, Docker, Go, Node, shelley-cli)
 	silentProgress := func(msg string) {} // Silent for imports
-	_, _ = configureContainerEnvironment(name, containerUser, providerIndex, apiKey, baseURL, sshKey, silentProgress)
+	_, _ = configureContainerEnvironment(name, containerUser, domain, providerIndex, apiKey, baseURL, sshKey, silentProgress)
 
 	return nil
 }
@@ -1741,7 +1741,7 @@ func configureSSHPiper(name, ip, containerUser, userPublicKey string) {
 // configureContainerEnvironment sets up the container with all required software and configuration
 // This includes: user setup, Docker, Go, Node.js, shelley-cli, and API key configuration
 // Returns the screen session ID for shelley serve, or empty string if not started
-func configureContainerEnvironment(containerName, containerUser string, providerIndex int, apiKey, baseURL, sshKey string, sendProgress func(string)) (string, error) {
+func configureContainerEnvironment(containerName, containerUser, domain string, providerIndex int, apiKey, baseURL, sshKey string, sendProgress func(string)) (string, error) {
 	// Helper to run commands in container as root
 	rootExec := func(args ...string) error {
 		cmd := exec.Command("incus", append([]string{"exec", containerName, "--"}, args...)...)
@@ -1903,7 +1903,52 @@ make
 		}
 	}
 
-	// STEP 8: Start shelley serve in a screen session
+	// STEP 8: Configure custom MOTD
+	sendProgress("Configuring welcome message (MOTD)...")
+	motdScript := fmt.Sprintf(`#!/bin/bash
+# shelley-lxc custom MOTD
+
+echo ""
+echo "═══════════════════════════════════════════════════════════════════════════════"
+echo "  shelley-lxc Container: %s"
+echo "═══════════════════════════════════════════════════════════════════════════════"
+echo ""
+echo "  Domain:     https://%s"
+echo "  Shelley UI: https://shelley.%s"
+echo "  Upload:     https://shelley.%s/upload"
+echo ""
+echo "  ─────────────────────────────────────────────────────────────────────────────"
+echo "  Installed Tools:"
+echo "    • Docker      $(docker --version 2>/dev/null | awk '{print $3}' | tr -d ',' || echo 'not found')"
+echo "    • Go          $(go version 2>/dev/null | awk '{print $3}' | sed 's/go//' || echo 'not found')"
+echo "    • Node.js     $(node --version 2>/dev/null || echo 'not found')"
+echo "    • shelley-cli $(~/go/bin/shelley version 2>/dev/null | grep -o '"version":"[^"]*"' | cut -d'"' -f4 || echo 'installed')"
+echo ""
+echo "  ─────────────────────────────────────────────────────────────────────────────"
+echo "  shelley serve Status:"
+SCREEN_SESSION=$(screen -ls 2>/dev/null | grep shelley | awk '{print $1}')
+if [ -n "$SCREEN_SESSION" ]; then
+    echo "    Running in screen session: $SCREEN_SESSION"
+    echo "    Attach with: screen -x $SCREEN_SESSION"
+else
+    echo "    Not running (start with: screen -dmS shelley shelley serve)"
+fi
+echo "    Log file: ~/shelley-serve.log"
+echo ""
+echo "  ─────────────────────────────────────────────────────────────────────────────"
+echo "  Documentation: https://github.com/jgbrwn/shelley-lxc"
+echo "═══════════════════════════════════════════════════════════════════════════════"
+echo ""
+`, containerName, domain, domain, domain)
+
+	tmpMotd, _ := os.CreateTemp("", "99-shelley-lxc")
+	tmpMotd.WriteString(motdScript)
+	tmpMotd.Close()
+	exec.Command("incus", "file", "push", tmpMotd.Name(), containerName+"/etc/update-motd.d/99-shelley-lxc").Run()
+	os.Remove(tmpMotd.Name())
+	rootExec("chmod", "+x", "/etc/update-motd.d/99-shelley-lxc")
+
+	// STEP 9: Start shelley serve in a screen session
 	sendProgress("Starting shelley serve in screen session...")
 	
 	// Start shelley serve in a detached screen session named 'shelley'
