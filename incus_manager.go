@@ -1999,9 +1999,9 @@ echo ""
 echo "  ─────────────────────────────────────────────────────────────────────────────"
 echo "  Installed Tools:"
 echo "    • Docker      $(docker --version 2>/dev/null | awk '{print $3}' | tr -d ',' || echo 'not found')"
-echo "    • Go          $(go version 2>/dev/null | awk '{print $3}' | sed 's/go//' || echo 'not found')"
+echo "    • Go          $(/usr/local/go/bin/go version 2>/dev/null | awk '{print $3}' | sed 's/go//' || echo 'not found')"
 echo "    • Node.js     $(node --version 2>/dev/null || echo 'not found')"
-echo "    • shelley-cli $(~/go/bin/shelley version 2>/dev/null | grep -o '"commit":"[^"]*"' | cut -d'"' -f4 | cut -c1-8 || echo 'installed')"
+echo "    • shelley-cli $(/home/%s/go/bin/shelley version 2>/dev/null | grep -o '"commit":"[^"]*"' | cut -d'"' -f4 | cut -c1-8 || echo 'installed')"
 echo ""
 echo "  ─────────────────────────────────────────────────────────────────────────────"
 echo "  shelley serve Status:"
@@ -2018,7 +2018,7 @@ echo "  ────────────────────────
 echo "  Documentation: https://github.com/jgbrwn/shelley-lxc"
 echo "═══════════════════════════════════════════════════════════════════════════════"
 echo ""
-`, containerName, domain, domain, domain)
+`, containerName, domain, domain, domain, containerUser)
 
 	tmpMotd, _ := os.CreateTemp("", "99-shelley-lxc")
 	tmpMotd.WriteString(motdScript)
