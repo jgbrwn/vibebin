@@ -203,8 +203,10 @@ During container creation, the following is automatically installed:
 - **Docker** (via official get.docker.com script)
 - **Go** (latest version, architecture auto-detected)
 - **Node.js** (latest LTS via NodeSource)
-- **shelley-cli** (built from source)
+- **shelley-cli** (built from source, runs in screen session)
+- **Igor service** (systemd service for file uploads on port 8099)
 - **API key configuration** (in user's ~/.bashrc)
+- **Custom MOTD** (shows container info, URLs, and tool versions on SSH login)
 
 ## ⚠️ Required: SSHPiper Manual Setup (After First Run)
 
@@ -296,15 +298,39 @@ After creating a container, you can access shelley-cli in two ways:
 
 Access the web interface at `https://shelley.yourdomain.com` (protected by HTTP Basic Auth with the credentials you set during creation).
 
-### Terminal
-
-SSH in and run shelley-cli:
+The web UI is served by `shelley serve` which runs automatically in a **screen session** inside the container. To check its status or troubleshoot:
 
 ```bash
 # SSH to your container
 ssh -p 2222 container-name@host.example.com
 
-# Run shelley-cli
+# Check if shelley serve is running
+screen -ls
+
+# Attach to the screen session to see output
+screen -x shelley
+
+# Detach from screen (without stopping it): Ctrl+A, then D
+
+# View the log file
+cat ~/shelley-serve.log
+```
+
+If the screen session isn't running, you can start it manually:
+
+```bash
+screen -dmS shelley bash -c '~/shelley-launcher.sh; exec bash'
+```
+
+### Terminal
+
+SSH in and run shelley-cli interactively:
+
+```bash
+# SSH to your container
+ssh -p 2222 container-name@host.example.com
+
+# Run shelley-cli in terminal mode
 shelley
 ```
 
@@ -312,7 +338,11 @@ The API key you provided during container creation is already configured in `~/.
 
 ### Updating shelley-cli
 
-From the container detail view, press `u` to update shelley-cli to the latest version. This will pull and rebuild from the repository.
+From the container detail view, press `u` to update shelley-cli to the latest version. This will:
+1. Stop the running `shelley serve` process
+2. Pull and rebuild from the repository
+3. Restart `shelley serve` in a new screen session
+4. Restart the Igor upload service
 
 ### Using Custom API Endpoints
 
@@ -448,6 +478,37 @@ Containers use Incus's default "last-state" behavior (by not setting `boot.autos
 Incus automatically tracks each container's power state and restores it when the daemon starts.
 
 ## Known Issues / What Doesn't Work Currently
+
+### Web UI and Upload Service - Not Fully Tested
+
+⚠️ **Important**: While the infrastructure is in place and services are running, the web-based features have not been put through real-world testing yet:
+
+**shelley-cli Web UI** (`https://shelley.yourdomain.com`):
+- The web UI loads and is accessible
+- Basic Auth protection is working
+- **NOT YET TESTED** with actual API keys and real LLM usage
+- Model selection, API key configuration, and actual AI interactions need validation
+- There may be issues with API keys, model availability, or UI functionality
+
+**Igor Upload Service** (`https://shelley.yourdomain.com/upload`):
+- The upload page loads but **does not work correctly** in our implementation
+- File uploads may fail or behave unexpectedly
+- This feature was originally designed for exe.dev VMs and may need adaptation
+- The `/pick` command integration with shelley-cli is untested
+
+**What IS working**:
+- Caddy reverse proxy routes are correctly configured
+- SSL/TLS certificates are properly issued
+- Basic Auth is protecting the endpoints
+- The services (shelley serve, igor) are running in the containers
+
+**What needs testing/fixing**:
+- End-to-end API key flow with actual LLM providers
+- Model selection and availability in the web UI
+- File upload functionality
+- Integration between Igor uploads and shelley-cli `/pick` command
+
+We will be working through these issues as we put the system through real-world use.
 
 ### Container Setup Time
 
