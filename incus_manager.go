@@ -1929,6 +1929,7 @@ screen -ls | grep shelley | awk '{print $1}'
 	if screenSessionID != "" {
 		sendProgress(fmt.Sprintf("shelley serve running in screen session: %s", screenSessionID))
 		sendProgress(fmt.Sprintf("To attach: ssh to container then run: screen -x %s", screenSessionID))
+		sendProgress("Log file: ~/shelley-serve.log")
 	} else {
 		sendProgress("Warning: Could not determine screen session ID")
 	}
@@ -2013,6 +2014,7 @@ sleep 2
 SESSION=$(screen -ls | grep shelley | awk '{print $1}')
 echo "shelley serve restarted in screen session: $SESSION"
 echo "To attach: screen -x $SESSION"
+echo "Log file: ~/shelley-serve.log"
 `
 		// Run as container user
 		cmd := exec.Command("incus", "exec", containerName, "--", "su", "-", containerUser, "-c", updateScript)
