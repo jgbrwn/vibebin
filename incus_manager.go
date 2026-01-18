@@ -1540,6 +1540,12 @@ func updateCaddyConfig(name, domain, ip string, appPort int, authUser, authHash 
 		uploadHandlers = append(uploadHandlers, authHandler)
 	}
 
+	// Add rewrite handler to strip /upload prefix before proxying
+	uploadHandlers = append(uploadHandlers, map[string]interface{}{
+		"handler": "rewrite",
+		"strip_path_prefix": "/upload",
+	})
+
 	// Add reverse proxy handler for Igor upload service
 	uploadHandlers = append(uploadHandlers, map[string]interface{}{
 		"handler":   "reverse_proxy",
