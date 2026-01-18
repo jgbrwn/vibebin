@@ -770,18 +770,30 @@ func getContainerStatus(name string) (status, ip, cpu, memory string) {
 		}
 	}
 
-	// Format CPU (nanoseconds to seconds)
+	// Format CPU time (nanoseconds to human readable)
+	// This is cumulative CPU time used, not current CPU percentage
 	if list[0].State.CPU.Usage > 0 {
 		cpuSec := float64(list[0].State.CPU.Usage) / 1e9
-		cpu = fmt.Sprintf("%.1fs", cpuSec)
+		if cpuSec >= 3600 {
+			cpu = fmt.Sprintf("%.1fh", cpuSec/3600)
+		} else if cpuSec >= 60 {
+			cpu = fmt.Sprintf("%.1fm", cpuSec/60)
+		} else {
+			cpu = fmt.Sprintf("%.0fs", cpuSec)
+		}
 	} else {
 		cpu = "0s"
 	}
 
-	// Format Memory (bytes to MB)
+	// Format Memory (bytes to MB/GB)
+	// Note: This is total memory usage including buffers/cache
 	if list[0].State.Memory.Usage > 0 {
 		memMB := float64(list[0].State.Memory.Usage) / (1024 * 1024)
-		memory = fmt.Sprintf("%.0fMB", memMB)
+		if memMB >= 1024 {
+			memory = fmt.Sprintf("%.1fGB", memMB/1024)
+		} else {
+			memory = fmt.Sprintf("%.0fMB", memMB)
+		}
 	} else {
 		memory = "0MB"
 	}
@@ -3375,7 +3387,7 @@ func (m model) viewList() string {
 	if len(m.containers) == 0 {
 		s += "  No containers. Press [n] to create one.\n"
 	} else {
-		s += fmt.Sprintf("  %-22s %-14s %-8s %-6s %-6s %-5s %s\n", "DOMAIN", "IP", "STATUS", "CPU", "MEM", "PORT", "CREATED")
+		s += fmt.Sprintf("  %-22s %-14s %-8s %-6s %-6s %-5s %s\n", "DOMAIN", "IP", "STATUS", "TIME", "MEM", "PORT", "CREATED")
 		s += "  " + strings.Repeat("─", 85) + "\n"
 		for i, c := range m.containers {
 			cursor := "  "
@@ -3500,8 +3512,8 @@ func (m model) viewContainerDetail() string {
 	s += fmt.Sprintf("  Domain:       %s\n", c.Domain)
 	s += fmt.Sprintf("  Status:       %s\n", c.Status)
 	s += fmt.Sprintf("  IP:           %s\n", c.IP)
-	s += fmt.Sprintf("  CPU:          %s\n", c.CPU)
-	s += fmt.Sprintf("  Memory:       %s\n", c.Memory)
+	s += fmt.Sprintf("  CPU Time:     %s (cumulative)\n", c.CPU)
+	s += fmt.Sprintf("  Memory:       %s (incl. cache)\n", c.Memory)
 	s += fmt.Sprintf("  App Port:     %d\n", c.AppPort)
 	s += fmt.Sprintf("  Created:      %s\n", c.CreatedAt.Format("2006-01-02 15:04:05"))
 	s += "\n"
