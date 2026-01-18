@@ -2070,9 +2070,8 @@ screen -ls | grep shelley | awk '{print $1}'
 	tmpScreenScript, _ := os.CreateTemp("", "start-screen.sh")
 	tmpScreenScript.WriteString(startScreenScript)
 	tmpScreenScript.Close()
-	exec.Command("incus", "file", "push", tmpScreenScript.Name(), containerName+"/tmp/start-screen.sh").Run()
+	exec.Command("incus", "file", "push", "--mode=0755", tmpScreenScript.Name(), containerName+"/tmp/start-screen.sh").Run()
 	os.Remove(tmpScreenScript.Name())
-	rootExec("chmod", "+x", "/tmp/start-screen.sh")
 	
 	// Run the script and capture the screen session ID
 	screenCmd := exec.Command("incus", "exec", containerName, "--", "su", "-", containerUser, "-c", "/tmp/start-screen.sh")
