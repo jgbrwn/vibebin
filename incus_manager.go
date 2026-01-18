@@ -1910,7 +1910,7 @@ make
 	startScreenScript := `
 export PATH=$PATH:/usr/local/go/bin:$HOME/go/bin
 cd ~
-screen -dmS shelley bash -c 'source ~/.bashrc && shelley serve -port 9999 2>&1 | tee ~/shelley-serve.log'
+screen -dmS shelley bash -c 'source ~/.bashrc && shelley serve'
 sleep 2
 screen -ls | grep shelley | awk '{print $1}'
 `
@@ -2008,7 +2008,7 @@ make
 echo "shelley-cli updated successfully!"
 
 # Restart shelley serve in screen
-screen -dmS shelley bash -c 'source ~/.bashrc && shelley serve -port 9999 2>&1 | tee ~/shelley-serve.log'
+screen -dmS shelley bash -c 'source ~/.bashrc && shelley serve'
 sleep 2
 SESSION=$(screen -ls | grep shelley | awk '{print $1}')
 echo "shelley serve restarted in screen session: $SESSION"
