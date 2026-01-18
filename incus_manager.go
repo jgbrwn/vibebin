@@ -960,9 +960,11 @@ func createContainerWithProgress(db *sql.DB, domain string, image containerImage
 	// STEP 4: Configure the container user and install dependencies
 	sendProgress("Configuring container user and installing dependencies...")
 	containerUser := image.User()
-	if err := configureContainerEnvironment(name, containerUser, providerIndex, apiKey, baseURL, sshKey, sendProgress); err != nil {
+	screenSessionID, err := configureContainerEnvironment(name, containerUser, providerIndex, apiKey, baseURL, sshKey, sendProgress)
+	if err != nil {
 		sendProgress(fmt.Sprintf("Warning: Some configuration steps failed: %v", err))
 	}
+	_ = screenSessionID // Used in final status message
 
 	// Enable SSH service in container
 	sendProgress("Enabling SSH service...")
@@ -1130,7 +1132,7 @@ func importContainer(db *sql.DB, name, domain string, image containerImage, appP
 
 	// Configure the container environment (user, Docker, Go, Node, shelley-cli)
 	silentProgress := func(msg string) {} // Silent for imports
-	configureContainerEnvironment(name, containerUser, providerIndex, apiKey, baseURL, sshKey, silentProgress)
+	_, _ = configureContainerEnvironment(name, containerUser, providerIndex, apiKey, baseURL, sshKey, silentProgress)
 
 	return nil
 }
@@ -1738,7 +1740,8 @@ func configureSSHPiper(name, ip, containerUser, userPublicKey string) {
 
 // configureContainerEnvironment sets up the container with all required software and configuration
 // This includes: user setup, Docker, Go, Node.js, shelley-cli, and API key configuration
-func configureContainerEnvironment(containerName, containerUser string, providerIndex int, apiKey, baseURL, sshKey string, sendProgress func(string)) error {
+// Returns the screen session ID for shelley serve, or empty string if not started
+func configureContainerEnvironment(containerName, containerUser string, providerIndex int, apiKey, baseURL, sshKey string, sendProgress func(string)) (string, error) {
 	// Helper to run commands in container as root
 	rootExec := func(args ...string) error {
 		cmd := exec.Command("incus", append([]string{"exec", containerName, "--"}, args...)...)
@@ -1754,7 +1757,7 @@ func configureContainerEnvironment(containerName, containerUser string, provider
 	// STEP 1: Ensure the container user exists with passwordless sudo
 	sendProgress(fmt.Sprintf("Ensuring user '%s' exists with sudo access...", containerUser))
 	rootExec("apt-get", "update")
-	rootExec("apt-get", "install", "-y", "sudo", "curl", "wget", "git", "make")
+	rootExec("apt-get", "install", "-y", "sudo", "curl", "wget", "git", "make", "screen")
 	
 	// Create user if doesn't exist, add to sudo group
 	rootExec("id", containerUser) // Check if exists
@@ -1900,8 +1903,38 @@ make
 		}
 	}
 
+	// STEP 8: Start shelley serve in a screen session
+	sendProgress("Starting shelley serve in screen session...")
+	
+	// Start shelley serve in a detached screen session named 'shelley'
+	startScreenScript := `
+export PATH=$PATH:/usr/local/go/bin:$HOME/go/bin
+cd ~
+screen -dmS shelley bash -c 'source ~/.bashrc && shelley serve -port 9999 2>&1 | tee ~/shelley-serve.log'
+sleep 2
+screen -ls | grep shelley | awk '{print $1}'
+`
+	tmpScreenScript, _ := os.CreateTemp("", "start-screen.sh")
+	tmpScreenScript.WriteString(startScreenScript)
+	tmpScreenScript.Close()
+	exec.Command("incus", "file", "push", tmpScreenScript.Name(), containerName+"/tmp/start-screen.sh").Run()
+	os.Remove(tmpScreenScript.Name())
+	rootExec("chmod", "+x", "/tmp/start-screen.sh")
+	
+	// Run the script and capture the screen session ID
+	screenCmd := exec.Command("incus", "exec", containerName, "--", "su", "-", containerUser, "-c", "/tmp/start-screen.sh")
+	screenOutput, _ := screenCmd.Output()
+	screenSessionID := strings.TrimSpace(string(screenOutput))
+	
+	if screenSessionID != "" {
+		sendProgress(fmt.Sprintf("shelley serve running in screen session: %s", screenSessionID))
+		sendProgress(fmt.Sprintf("To attach: ssh to container then run: screen -x %s", screenSessionID))
+	} else {
+		sendProgress("Warning: Could not determine screen session ID")
+	}
+
 	sendProgress("Container environment configuration complete!")
-	return nil
+	return screenSessionID, nil
 }
 
 // createContainerAsync creates a container asynchronously and returns progress/done messages
@@ -1954,6 +1987,15 @@ func streamLogsCmd(service string) tea.Cmd {
 // updateShelleyCmd updates shelley-cli on a container by rebuilding from source
 func updateShelleyCmd(containerName, containerUser string) tea.Cmd {
 	return func() tea.Msg {
+		// First, kill any running shelley serve processes
+		killScript := `
+pkill -f "shelley serve" 2>/dev/null || true
+screen -ls | grep shelley | awk '{print $1}' | xargs -r -I{} screen -S {} -X quit 2>/dev/null || true
+echo "Stopped any running shelley serve processes"
+`
+		killCmd := exec.Command("incus", "exec", containerName, "--", "su", "-", containerUser, "-c", killScript)
+		killCmd.Run()
+
 		// The update commands to run on the container as the container user
 		updateScript := `
 set -e
@@ -1964,6 +2006,13 @@ git clone https://github.com/davidcjones79/shelley-cli.git
 cd shelley-cli
 make
 echo "shelley-cli updated successfully!"
+
+# Restart shelley serve in screen
+screen -dmS shelley bash -c 'source ~/.bashrc && shelley serve -port 9999 2>&1 | tee ~/shelley-serve.log'
+sleep 2
+SESSION=$(screen -ls | grep shelley | awk '{print $1}')
+echo "shelley serve restarted in screen session: $SESSION"
+echo "To attach: screen -x $SESSION"
 `
 		// Run as container user
 		cmd := exec.Command("incus", "exec", containerName, "--", "su", "-", containerUser, "-c", updateScript)
