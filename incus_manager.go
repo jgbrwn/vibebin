@@ -2171,39 +2171,96 @@ func streamLogsCmd(service string) tea.Cmd {
 func updateShelleyCmd(containerName, containerUser string) tea.Cmd {
 	return func() tea.Msg {
 		userHome := "/home/" + containerUser
+		result := ""
+
+		// Step 1: Check if update is needed by comparing commits
+		checkScript := userHome + "/go/bin/shelley version 2>/dev/null | grep commit | head -1"
+		localCommitCmd := exec.Command("incus", "exec", containerName, "--", "su", "-", containerUser, "-c", checkScript)
+		localCommitOut, _ := localCommitCmd.Output()
+		localCommit := strings.TrimSpace(string(localCommitOut))
 		
-		// First, kill any running shelley serve processes and stop igor
+		// Get latest commit from GitHub
+		remoteCommitCmd := exec.Command("curl", "-s", "https://api.github.com/repos/davidcjones79/shelley-cli/commits/main")
+		remoteCommitOut, _ := remoteCommitCmd.Output()
+		remoteCommit := ""
+		if strings.Contains(string(remoteCommitOut), `"sha"`) {
+			// Extract first sha from response
+			parts := strings.SplitN(string(remoteCommitOut), `"sha":"`, 2)
+			if len(parts) > 1 {
+				remoteCommit = strings.SplitN(parts[1], `"`, 2)[0]
+			}
+		}
+		
+		// Compare commits (extract just the hash from local)
+		localHash := ""
+		if strings.Contains(localCommit, `"commit"`) {
+			parts := strings.SplitN(localCommit, `"`, 4)
+			if len(parts) >= 4 {
+				localHash = parts[3]
+			}
+		}
+		
+		if localHash != "" && remoteCommit != "" && localHash == remoteCommit {
+			return shelleyUpdateMsg{
+				output:  fmt.Sprintf("✅ shelley-cli is already up to date!\n\nLocal commit:  %s\nRemote commit: %s", localHash[:8], remoteCommit[:8]),
+				success: true,
+			}
+		}
+		
+		if localHash != "" && remoteCommit != "" {
+			result += fmt.Sprintf("Updating shelley-cli...\nLocal:  %s\nRemote: %s\n\n", localHash[:8], remoteCommit[:8])
+		}
+
+		// Step 2: Stop running processes
 		killScript := `
 pkill -f "shelley serve" 2>/dev/null || true
 screen -ls | grep shelley | awk '{print $1}' | xargs -r -I{} screen -S {} -X quit 2>/dev/null || true
 sudo systemctl stop igor 2>/dev/null || true
-echo "Stopped any running shelley serve processes and igor service"
+echo "Stopped running shelley processes"
 sleep 2
 `
 		killCmd := exec.Command("incus", "exec", containerName, "--", "su", "-", containerUser, "-c", killScript)
 		killCmd.Run()
-		
-		// Give processes time to fully terminate
 		time.Sleep(2 * time.Second)
 
-		// The update commands to run on the container as root (for systemctl operations)
-		updateScript := fmt.Sprintf(`
+		// Step 3: Clone and build shelley-cli
+		buildScript := `
 set -e
 export PATH=$PATH:/usr/local/go/bin
-cd %s
+cd ` + userHome + `
 rm -rf shelley-cli
 git clone https://github.com/davidcjones79/shelley-cli.git
 cd shelley-cli
 make
-# Remove old binary first (avoids 'Text file busy' if process didn't fully stop)
-rm -f %s/go/bin/shelley
-# Copy updated binary
-cp bin/shelley %s/go/bin/
-chown %s:%s %s/go/bin/shelley
+echo "Build complete"
+`
+		buildCmd := exec.Command("incus", "exec", containerName, "--", "sh", "-c", buildScript)
+		buildOutput, buildErr := buildCmd.CombinedOutput()
+		result += string(buildOutput)
+		
+		if buildErr != nil {
+			result += fmt.Sprintf("\n\n❌ Build failed: %v", buildErr)
+			return shelleyUpdateMsg{output: result, success: false}
+		}
 
-# Update igor.service with correct user
-cat > /etc/systemd/system/igor.service << 'IGOREOF'
-[Unit]
+		// Step 4: Install binary (as root)
+		installScript := `
+rm -f ` + userHome + `/go/bin/shelley
+cp ` + userHome + `/shelley-cli/bin/shelley ` + userHome + `/go/bin/
+chown ` + containerUser + `:` + containerUser + ` ` + userHome + `/go/bin/shelley
+echo "Binary installed"
+`
+		installCmd := exec.Command("incus", "exec", containerName, "--", "sh", "-c", installScript)
+		installOutput, installErr := installCmd.CombinedOutput()
+		result += string(installOutput)
+		
+		if installErr != nil {
+			result += fmt.Sprintf("\n\n❌ Install failed: %v", installErr)
+			return shelleyUpdateMsg{output: result, success: false}
+		}
+
+		// Step 5: Update igor.service
+		igorService := fmt.Sprintf(`[Unit]
 Description=Igor - Shelley File Transfer Assistant
 After=network.target
 
@@ -2211,13 +2268,13 @@ After=network.target
 Type=exec
 User=%s
 Group=%s
-WorkingDirectory=/home/%s
-ExecStart=/home/%s/go/bin/shelley igor -port 8099
+WorkingDirectory=%s
+ExecStart=%s/go/bin/shelley igor -port 8099
 Restart=on-failure
 RestartSec=5
-Environment=HOME=/home/%s
+Environment=HOME=%s
 Environment=USER=%s
-Environment=PATH=/usr/local/bin:/usr/bin:/bin:/home/%s/go/bin
+Environment=PATH=/usr/local/bin:/usr/bin:/bin:%s/go/bin
 
 StandardOutput=journal
 StandardError=journal
@@ -2225,37 +2282,28 @@ SyslogIdentifier=igor
 
 [Install]
 WantedBy=multi-user.target
-IGOREOF
+`, containerUser, containerUser, userHome, userHome, userHome, containerUser, userHome)
 
-systemctl daemon-reload
-systemctl enable --now igor
-
-echo "shelley-cli and igor service updated successfully!"
-`, userHome, userHome, userHome, containerUser, containerUser, userHome, containerUser, containerUser, userHome, containerUser, userHome, containerUser, containerUser, userHome)
+		// Write service file via temp file
+		tmpService, _ := os.CreateTemp("", "igor.service")
+		tmpService.WriteString(igorService)
+		tmpService.Close()
+		exec.Command("incus", "file", "push", tmpService.Name(), containerName+"/etc/systemd/system/igor.service").Run()
+		os.Remove(tmpService.Name())
 		
-		// Run update as root
-		updateCmd := exec.Command("incus", "exec", containerName, "--", "sh", "-c", updateScript)
-		updateOutput, updateErr := updateCmd.CombinedOutput()
-		result := string(updateOutput)
-		
-		if updateErr != nil {
-			result += fmt.Sprintf("\n\n❌ Update failed: %v", updateErr)
-			return shelleyUpdateMsg{output: result, success: false}
-		}
+		// Reload and start igor
+		exec.Command("incus", "exec", containerName, "--", "systemctl", "daemon-reload").Run()
+		exec.Command("incus", "exec", containerName, "--", "systemctl", "enable", "--now", "igor").Run()
+		result += "Igor service updated\n"
 
-		// Restart shelley serve in screen as user
-		restartScript := fmt.Sprintf(`
-export PATH=$PATH:/usr/local/go/bin:%s/go/bin
-cd %s
-screen -dmS shelley bash -c '%s/shelley-launcher.sh; exec bash'
+		// Step 6: Restart shelley serve in screen
+		restartScript := `
+export PATH=$PATH:/usr/local/go/bin:` + userHome + `/go/bin
+cd ` + userHome + `
+screen -dmS shelley bash -c '` + userHome + `/shelley-launcher.sh; exec bash'
 sleep 3
-SESSION=$(screen -ls | grep shelley | awk '{print $1}')
-echo "shelley serve restarted in screen session: $SESSION"
-echo "To attach: screen -x $SESSION"
-echo "Log file: ~/shelley-serve.log"
-`, userHome, userHome, userHome)
-		
-		// Run restart as user
+screen -ls | grep shelley
+`
 		restartCmd := exec.Command("incus", "exec", containerName, "--", "su", "-", containerUser, "-c", restartScript)
 		restartOutput, _ := restartCmd.CombinedOutput()
 		result += string(restartOutput)
