@@ -966,10 +966,6 @@ func createContainerWithProgress(db *sql.DB, domain string, image containerImage
 	}
 	_ = screenSessionID // Used in final status message
 
-	// Enable SSH service in container
-	sendProgress("Enabling SSH service...")
-	exec.Command("incus", "exec", name, "--", "systemctl", "enable", "--now", "ssh").Run()
-
 	// STEP 5: Get container IP (SSH key setup is handled by configureSSHPiper later)
 	sendProgress("Getting container IP address...")
 	_, ip, _, _ := getContainerStatus(name)
@@ -1775,7 +1771,7 @@ func configureContainerEnvironment(containerName, containerUser, domain string, 
 	// STEP 1: Ensure the container user exists with passwordless sudo
 	sendProgress(fmt.Sprintf("Ensuring user '%s' exists with sudo access...", containerUser))
 	rootExec("apt-get", "update")
-	rootExec("apt-get", "install", "-y", "sudo", "curl", "wget", "git", "make", "screen")
+	rootExec("apt-get", "install", "-y", "sudo", "curl", "wget", "git", "make", "screen", "openssh-server")
 	
 	// Create user if doesn't exist, add to sudo group
 	rootExec("id", containerUser) // Check if exists
@@ -1793,8 +1789,15 @@ func configureContainerEnvironment(containerName, containerUser, domain string, 
 		os.Remove(tmpSudoers.Name())
 	}
 
-	// STEP 2: Set up SSH key for the user
+	// STEP 2: Configure SSH server security
 	sendProgress("Configuring SSH access...")
+	// Harden sshd_config: disable root login and password auth
+	rootExec("sed", "-i", "s/^#*PermitRootLogin.*/PermitRootLogin no/", "/etc/ssh/sshd_config")
+	rootExec("sed", "-i", "s/^#*PasswordAuthentication.*/PasswordAuthentication no/", "/etc/ssh/sshd_config")
+	// Enable and start SSH service
+	rootExec("systemctl", "enable", "--now", "ssh")
+
+	// Set up SSH key for the user
 	userHome := fmt.Sprintf("/home/%s", containerUser)
 	sshDir := userHome + "/.ssh"
 	rootExec("mkdir", "-p", sshDir)
