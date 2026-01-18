@@ -22,7 +22,7 @@ This project provides the infrastructure to self-host your own AI coding environ
 Each container is a fully persistent Linux sandbox running latest **Ubuntu LTS** or **Debian**, with:
 
 - **[shelley-cli](https://github.com/davidcjones79/shelley-cli)** - AI coding agent with terminal and web UI interfaces
-- **shelley-cli web UI** accessible via HTTPS at `shelley.yourdomain.com` (Basic Auth protected)
+- **Shelley Web Agent** accessible via HTTPS at `shelley.yourdomain.com` (Basic Auth protected)
 - **Igor file upload** at `shelley.yourdomain.com/upload` - drag-and-drop files to your container
 - **Your app/site** accessible via HTTPS at `yourdomain.com`
 - **SSH access** for direct terminal access to your sandbox (VS Code Remote SSH compatible)
@@ -46,7 +46,7 @@ Each container is a fully persistent Linux sandbox running latest **Ubuntu LTS**
 | **SSHPiper** | SSH routing - access any container via `ssh -p 2222 container-name@host` |
 | **Ubuntu/Debian** | Native Incus images (user choice during creation) |
 | **shelley-cli** | Terminal-based AI coding agent with web UI |
-| **shelley-cli web UI** | Web interface for shelley-cli (port 9999) |
+| **Shelley Web Agent** | Web interface for shelley-cli (port 9999) |
 | **Igor upload service** | Web-based file upload to containers (port 8099) |
 
 ### shelley-cli
@@ -330,7 +330,7 @@ ssh user@host.example.com
 
 For HTTPS to work, DNS must point to the host server:
 - `domain.com` → Host IP
-- `shelley.domain.com` → Host IP (for shelley-cli web UI)
+- `shelley.domain.com` → Host IP (for Shelley Web Agent)
 
 Caddy will automatically obtain Let's Encrypt certificates for both domains.
 
@@ -394,7 +394,7 @@ Caddy will automatically obtain Let's Encrypt certificates for both domains.
 ### How Traffic Flows
 
 1. **HTTPS requests** to `myapp.example.com` → Caddy → Container's app (port 8000)
-2. **HTTPS requests** to `shelley.myapp.example.com` → Caddy (with Basic Auth) → shelley-cli web UI (port 9999)
+2. **HTTPS requests** to `shelley.myapp.example.com` → Caddy (with Basic Auth) � Shelley Web Agent (port 9999)
 3. **HTTPS requests** to `shelley.myapp.example.com/upload` → Caddy (with Basic Auth) → Igor upload service (port 8099)
 4. **SSH connections** to port 2222 as `myapp-example-com@host` → SSHPiper → Container's SSH as `ubuntu`/`debian`
 
