@@ -1,39 +1,141 @@
 This product includes software developed by third parties outlined below:
 
-Shelley-lxc | Incus Container Manager
+Incus Container Manager
 Copyright 2026 https://github.com/jgbrwn
 
-shelley-cli (https://github.com/davidcjones79/shelley-cli)
-A fork of Shelley by Bold Software, Inc. (https://github.com/boldsoftware/shelley)
-Copyright 2026 Bold Software, Inc.
-Licensed under the Apache License, Version 2.0.
+================================================================================
+OpenCode
+================================================================================
+Copyright © 2024-present Anomaly (https://anomaly.co)
+Licensed under the MIT License
+Source: https://github.com/anomalyco/opencode
 
-Used as the AI coding agent (terminal and web UI) inside containers.
-Installed from source during container creation.
+Used as an open-source AI coding agent (terminal and web UI) inside containers.
+Installed via official installer script during container creation.
 
+================================================================================
+NanoCode
+================================================================================
+Copyright © 2024-present NanoGPT Community
+Licensed under the MIT License (fork of OpenCode)
+Source: https://github.com/nanogpt-community/nanocode
+
+Used as a NanoGPT-optimized AI coding agent inside containers.
+Installed via bun during container creation.
+
+================================================================================
 Incus (Linux Containers)
+================================================================================
 Copyright © 2023-present Linux Containers project
 Licensed under the Apache License, Version 2.0
 Source: https://github.com/lxc/incus
 
 Used as container runtime for lightweight, persistent Linux containers.
 
+================================================================================
 Caddy Web Server
+================================================================================
 Copyright © 2015-present Matthew Holt and The Caddy Authors
 Licensed under the Apache License, Version 2.0
 Source: https://github.com/caddyserver/caddy
 
-Used as reverse proxy with automatic HTTPS
+Used as reverse proxy with automatic HTTPS.
 
+================================================================================
 SSHPiper
+================================================================================
 Copyright © 2016-present tg123
 Licensed under the MIT License
 Source: https://github.com/tg123/sshpiper
 
-Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
 
-The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 
 Used for SSH routing to access containers via ssh container-name@host.
+
+================================================================================
+Docker
+================================================================================
+Copyright © 2013-present Docker, Inc.
+Licensed under the Apache License, Version 2.0
+Source: https://github.com/docker/docker-ce
+
+Installed inside containers for container-in-container workflows.
+
+================================================================================
+Go Programming Language
+================================================================================
+Copyright © 2009-present The Go Authors
+Licensed under the BSD 3-Clause License
+Source: https://github.com/golang/go
+
+Installed inside containers as a development tool.
+
+================================================================================
+Node.js
+================================================================================
+Copyright © Node.js contributors
+Licensed under the MIT License
+Source: https://github.com/nodejs/node
+
+Installed inside containers as a JavaScript runtime.
+
+================================================================================
+Bun
+================================================================================
+Copyright © 2022-present Oven (Jarred Sumner)
+Licensed under the MIT License
+Source: https://github.com/oven-sh/bun
+
+Installed inside containers as a JavaScript runtime and package manager.
+
+================================================================================
+Deno
+================================================================================
+Copyright © 2018-present the Deno authors
+Licensed under the MIT License
+Source: https://github.com/denoland/deno
+
+Installed inside containers as a JavaScript/TypeScript runtime.
+
+================================================================================
+uv (Astral)
+================================================================================
+Copyright © 2024-present Astral Software Inc.
+Licensed under the Apache License, Version 2.0 / MIT License (dual licensed)
+Source: https://github.com/astral-sh/uv
+
+Installed inside containers as a Python package manager.
+
+================================================================================
+Bubble Tea (charmbracelet/bubbletea)
+================================================================================
+Copyright © 2020-present Charmbracelet, Inc.
+Licensed under the MIT License
+Source: https://github.com/charmbracelet/bubbletea
+
+Used for the terminal user interface (TUI) of incus_manager.
+
+================================================================================
+Bubbles (charmbracelet/bubbles)
+================================================================================
+Copyright © 2020-present Charmbracelet, Inc.
+Licensed under the MIT License
+Source: https://github.com/charmbracelet/bubbles
+
+Used for TUI components (text input) in incus_manager.
