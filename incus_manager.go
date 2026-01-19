@@ -1837,19 +1837,7 @@ echo "Node.js $(node --version) installed successfully"
 
 	// STEP 6: Install uv (Python package manager)
 	sendProgress("Installing uv (Python package manager)...")
-	uvInstallScript := `
-set -e
-curl -LsSf https://astral.sh/uv/install.sh | sh
-echo "uv installed successfully"
-`
-	// Run as user since it installs to ~/.local/bin
-	tmpScript, _ := os.CreateTemp("", "install-uv.sh")
-	tmpScript.WriteString(uvInstallScript)
-	tmpScript.Close()
-	exec.Command("incus", "file", "push", tmpScript.Name(), containerName+"/tmp/install-uv.sh").Run()
-	os.Remove(tmpScript.Name())
-	rootExec("chmod", "+x", "/tmp/install-uv.sh")
-	if err := userExec("/tmp/install-uv.sh"); err != nil {
+	if err := userExec("curl -LsSf https://astral.sh/uv/install.sh | sh"); err != nil {
 		sendProgress(fmt.Sprintf("Warning: uv installation failed: %v", err))
 	} else {
 		sendProgress("✅ uv installed")
@@ -1859,18 +1847,7 @@ echo "uv installed successfully"
 
 	// STEP 7: Install Bun
 	sendProgress("Installing Bun...")
-	bunInstallScript := `
-set -e
-curl -fsSL https://bun.sh/install | bash
-echo "Bun installed successfully"
-`
-	tmpScript, _ = os.CreateTemp("", "install-bun.sh")
-	tmpScript.WriteString(bunInstallScript)
-	tmpScript.Close()
-	exec.Command("incus", "file", "push", tmpScript.Name(), containerName+"/tmp/install-bun.sh").Run()
-	os.Remove(tmpScript.Name())
-	rootExec("chmod", "+x", "/tmp/install-bun.sh")
-	if err := userExec("/tmp/install-bun.sh"); err != nil {
+	if err := userExec("curl -fsSL https://bun.sh/install | bash"); err != nil {
 		sendProgress(fmt.Sprintf("Warning: Bun installation failed: %v", err))
 	} else {
 		sendProgress("✅ Bun installed")
@@ -1880,18 +1857,7 @@ echo "Bun installed successfully"
 
 	// STEP 8: Install Deno
 	sendProgress("Installing Deno...")
-	denoInstallScript := `
-set -e
-curl -fsSL https://deno.land/install.sh | sh
-echo "Deno installed successfully"
-`
-	tmpScript, _ = os.CreateTemp("", "install-deno.sh")
-	tmpScript.WriteString(denoInstallScript)
-	tmpScript.Close()
-	exec.Command("incus", "file", "push", tmpScript.Name(), containerName+"/tmp/install-deno.sh").Run()
-	os.Remove(tmpScript.Name())
-	rootExec("chmod", "+x", "/tmp/install-deno.sh")
-	if err := userExec("/tmp/install-deno.sh"); err != nil {
+	if err := userExec("curl -fsSL https://deno.land/install.sh | sh"); err != nil {
 		sendProgress(fmt.Sprintf("Warning: Deno installation failed: %v", err))
 	} else {
 		sendProgress("✅ Deno installed")
@@ -1901,19 +1867,7 @@ echo "Deno installed successfully"
 
 	// STEP 9: Install opencode
 	sendProgress("Installing opencode...")
-	opencodeInstallScript := `
-set -e
-export PATH=$PATH:$HOME/.local/bin:$HOME/.bun/bin
-curl -fsSL https://opencode.ai/install | bash
-echo "opencode installed successfully"
-`
-	tmpScript, _ = os.CreateTemp("", "install-opencode.sh")
-	tmpScript.WriteString(opencodeInstallScript)
-	tmpScript.Close()
-	exec.Command("incus", "file", "push", tmpScript.Name(), containerName+"/tmp/install-opencode.sh").Run()
-	os.Remove(tmpScript.Name())
-	rootExec("chmod", "+x", "/tmp/install-opencode.sh")
-	if err := userExec("/tmp/install-opencode.sh"); err != nil {
+	if err := userExec("curl -fsSL https://opencode.ai/install | bash"); err != nil {
 		sendProgress(fmt.Sprintf("Warning: opencode installation failed: %v", err))
 	} else {
 		sendProgress("✅ opencode installed")
@@ -1921,22 +1875,9 @@ echo "opencode installed successfully"
 	// Add opencode to PATH
 	userExec("grep -q '.opencode/bin' ~/.bashrc || echo 'export PATH=$PATH:$HOME/.opencode/bin' >> ~/.bashrc")
 
-	// STEP 10: Install nanocode
+	// STEP 10: Install nanocode (requires bun to be in PATH)
 	sendProgress("Installing nanocode...")
-	nanocodeInstallScript := `
-set -e
-export PATH=$PATH:$HOME/.bun/bin:$HOME/.local/bin
-# Use bun to install nanocode globally
-bun i -g nanocode@latest
-echo "nanocode installed successfully"
-`
-	tmpScript, _ = os.CreateTemp("", "install-nanocode.sh")
-	tmpScript.WriteString(nanocodeInstallScript)
-	tmpScript.Close()
-	exec.Command("incus", "file", "push", tmpScript.Name(), containerName+"/tmp/install-nanocode.sh").Run()
-	os.Remove(tmpScript.Name())
-	rootExec("chmod", "+x", "/tmp/install-nanocode.sh")
-	if err := userExec("/tmp/install-nanocode.sh"); err != nil {
+	if err := userExec("export PATH=$PATH:$HOME/.bun/bin && bun i -g nanocode@latest"); err != nil {
 		sendProgress(fmt.Sprintf("Warning: nanocode installation failed: %v", err))
 	} else {
 		sendProgress("✅ nanocode installed")
