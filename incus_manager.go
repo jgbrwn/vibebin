@@ -1735,7 +1735,7 @@ func configureContainerEnvironment(containerName, containerUser, domain, sshKey 
 	if err := rootExec("apt-get", "update"); err != nil {
 		sendProgress(fmt.Sprintf("Warning: apt-get update failed: %v", err))
 	}
-	if err := rootExec("apt-get", "install", "-y", "sudo", "curl", "wget", "git", "make", "screen", "openssh-server", "unzip"); err != nil {
+	if err := rootExec("apt-get", "install", "-y", "sudo", "curl", "wget", "git", "make", "screen", "openssh-server", "unzip", "jq"); err != nil {
 		sendProgress(fmt.Sprintf("Warning: Failed to install base packages: %v", err))
 	}
 	
