@@ -2019,61 +2019,127 @@ func updateToolsCmd(containerName, containerUser string) tea.Cmd {
 			return string(out), err
 		}
 
-		// Step 1: Check current versions
-		result += "Checking current versions...\n"
-		
-		opencodeVersion, _ := userExec("~/.opencode/bin/opencode --version 2>/dev/null || echo 'not installed'")
-		nanocodeVersion, _ := userExec("~/.bun/bin/nanocode --version 2>/dev/null || echo 'not installed'")
-		
-		result += fmt.Sprintf("Current opencode: %s", strings.TrimSpace(opencodeVersion))
-		result += fmt.Sprintf("Current nanocode: %s\n", strings.TrimSpace(nanocodeVersion))
-
-		// Step 2: Update opencode
-		result += "\nUpdating opencode...\n"
-		opencodeUpdateScript := `
-set -e
-export PATH=$PATH:$HOME/.local/bin:$HOME/.bun/bin:$HOME/.opencode/bin
-curl -fsSL https://opencode.ai/install | bash
-~/.opencode/bin/opencode --version
-`
-		opencodeOut, opencodeErr := userExec(opencodeUpdateScript)
-		result += opencodeOut
-		if opencodeErr != nil {
-			result += fmt.Sprintf("Warning: opencode update had issues: %v\n", opencodeErr)
+		// Step 1: Check for running processes
+		result += "Checking for running processes...\n"
+		runningProcs, _ := userExec("pgrep -fa 'opencode|nanocode' 2>/dev/null || true")
+		if strings.TrimSpace(runningProcs) != "" {
+			result += "Found running processes:\n" + runningProcs + "\n"
+			result += "Stopping opencode/nanocode processes...\n"
+			userExec("pkill -f 'opencode serve' 2>/dev/null || true")
+			userExec("pkill -f 'nanocode serve' 2>/dev/null || true")
+			result += "✅ Processes stopped\n"
 		} else {
-			result += "✅ opencode updated\n"
+			result += "No running processes found\n"
 		}
 
-		// Step 3: Update nanocode
-		result += "\nUpdating nanocode...\n"
-		nanocodeUpdateScript := `
-set -e
-export PATH=$PATH:$HOME/.bun/bin:$HOME/.local/bin
-bun i -g nanocode@latest
-~/.bun/bin/nanocode --version
-`
-		nanocodeOut, nanocodeErr := userExec(nanocodeUpdateScript)
-		result += nanocodeOut
-		if nanocodeErr != nil {
-			result += fmt.Sprintf("Warning: nanocode update had issues: %v\n", nanocodeErr)
+		// Step 2: Check current versions
+		result += "\nChecking current versions...\n"
+		
+		currentOpencode := strings.TrimSpace(func() string {
+			v, _ := userExec("~/.opencode/bin/opencode --version 2>/dev/null || echo 'not installed'")
+			return v
+		}())
+		currentNanocode := strings.TrimSpace(func() string {
+			v, _ := userExec("~/.bun/bin/nanocode --version 2>/dev/null || echo 'not installed'")
+			return v
+		}())
+		
+		result += fmt.Sprintf("  Current opencode: %s\n", currentOpencode)
+		result += fmt.Sprintf("  Current nanocode: %s\n", currentNanocode)
+
+		// Step 3: Check latest available versions
+		result += "\nChecking latest available versions...\n"
+		
+		// Get latest opencode version from GitHub API
+		latestOpencodeOut, _ := exec.Command("curl", "-s", "https://api.github.com/repos/anomalyco/opencode/releases/latest").Output()
+		latestOpencode := ""
+		if idx := strings.Index(string(latestOpencodeOut), `"tag_name": "`); idx >= 0 {
+			start := idx + len(`"tag_name": "`)
+			end := strings.Index(string(latestOpencodeOut)[start:], `"`)
+			if end > 0 {
+				latestOpencode = strings.TrimPrefix(string(latestOpencodeOut)[start:start+end], "v")
+			}
+		}
+		
+		// Get latest nanocode version from GitHub API
+		latestNanocodeOut, _ := exec.Command("curl", "-s", "https://api.github.com/repos/nanogpt-community/nanocode/releases/latest").Output()
+		latestNanocode := ""
+		if idx := strings.Index(string(latestNanocodeOut), `"tag_name": "`); idx >= 0 {
+			start := idx + len(`"tag_name": "`)
+			end := strings.Index(string(latestNanocodeOut)[start:], `"`)
+			if end > 0 {
+				latestNanocode = strings.TrimPrefix(string(latestNanocodeOut)[start:start+end], "v")
+			}
+		}
+		
+		result += fmt.Sprintf("  Latest opencode:  %s\n", latestOpencode)
+		result += fmt.Sprintf("  Latest nanocode:  %s\n", latestNanocode)
+
+		opencodeNeedsUpdate := latestOpencode != "" && currentOpencode != latestOpencode && currentOpencode != "not installed"
+		nanocodeNeedsUpdate := latestNanocode != "" && currentNanocode != latestNanocode && currentNanocode != "not installed"
+		
+		var opencodeErr, nanocodeErr error
+
+		// Step 4: Update opencode if needed
+		if opencodeNeedsUpdate {
+			result += fmt.Sprintf("\nUpdating opencode (%s -> %s)...\n", currentOpencode, latestOpencode)
+			opencodeOut, err := userExec("curl -fsSL https://opencode.ai/install | bash && ~/.opencode/bin/opencode --version")
+			result += opencodeOut
+			opencodeErr = err
+			if err != nil {
+				result += fmt.Sprintf("Warning: opencode update had issues: %v\n", err)
+			} else {
+				result += "✅ opencode updated\n"
+			}
+		} else if currentOpencode == "not installed" {
+			result += "\nInstalling opencode...\n"
+			opencodeOut, err := userExec("curl -fsSL https://opencode.ai/install | bash && ~/.opencode/bin/opencode --version")
+			result += opencodeOut
+			opencodeErr = err
+			if err != nil {
+				result += fmt.Sprintf("Warning: opencode install had issues: %v\n", err)
+			} else {
+				result += "✅ opencode installed\n"
+			}
 		} else {
-			result += "✅ nanocode updated\n"
+			result += fmt.Sprintf("\n✅ opencode is already up to date (%s)\n", currentOpencode)
 		}
 
-		// Final summary
-		result += "\n"
-		newOpencodeVersion, _ := userExec("~/.opencode/bin/opencode --version 2>/dev/null || echo 'not installed'")
-		newNanocodeVersion, _ := userExec("~/.bun/bin/nanocode --version 2>/dev/null || echo 'not installed'")
-		
-		result += fmt.Sprintf("New opencode version: %s", strings.TrimSpace(newOpencodeVersion))
-		result += fmt.Sprintf("New nanocode version: %s\n", strings.TrimSpace(newNanocodeVersion))
+		// Step 5: Update nanocode if needed
+		if nanocodeNeedsUpdate {
+			result += fmt.Sprintf("\nUpdating nanocode (%s -> %s)...\n", currentNanocode, latestNanocode)
+			nanocodeOut, err := userExec("export PATH=$PATH:$HOME/.bun/bin && bun i -g nanocode@latest && ~/.bun/bin/nanocode --version")
+			result += nanocodeOut
+			nanocodeErr = err
+			if err != nil {
+				result += fmt.Sprintf("Warning: nanocode update had issues: %v\n", err)
+			} else {
+				result += "✅ nanocode updated\n"
+			}
+		} else if currentNanocode == "not installed" {
+			result += "\nInstalling nanocode...\n"
+			nanocodeOut, err := userExec("export PATH=$PATH:$HOME/.bun/bin && bun i -g nanocode@latest && ~/.bun/bin/nanocode --version")
+			result += nanocodeOut
+			nanocodeErr = err
+			if err != nil {
+				result += fmt.Sprintf("Warning: nanocode install had issues: %v\n", err)
+			} else {
+				result += "✅ nanocode installed\n"
+			}
+		} else {
+			result += fmt.Sprintf("\n✅ nanocode is already up to date (%s)\n", currentNanocode)
+		}
 
 		if opencodeErr != nil || nanocodeErr != nil {
 			result += "\n⚠️ Update completed with some warnings"
 			return toolsUpdateMsg{output: result, success: false}
 		}
 
-		result += "\n✅ All tools updated successfully!"
+		if !opencodeNeedsUpdate && !nanocodeNeedsUpdate && currentOpencode != "not installed" && currentNanocode != "not installed" {
+			result += "\n✅ All tools are already up to date!"
+		} else {
+			result += "\n✅ Update check complete!"
+		}
 		return toolsUpdateMsg{output: result, success: true}
 	}
 }
@@ -2182,14 +2248,6 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	if key == "ctrl+c" {
 		return m, tea.Quit
-	}
-	if key == "esc" {
-		if m.state != stateList {
-			m.state = stateList
-			m.textInput.Reset()
-			m.editingContainer = nil
-			return m, m.refreshContainers()
-		}
 	}
 
 	switch m.state {
@@ -2951,7 +3009,7 @@ func (m model) View() string {
 		} else if strings.Contains(m.updateOutput, "failed") {
 			statusIcon = "❌"
 		}
-		s := fmt.Sprintf("%s UPDATE SHELLEY-CLI: %s\n", statusIcon, containerName)
+		s := fmt.Sprintf("%s UPDATE OPENCODE/NANOCODE: %s\n", statusIcon, containerName)
 		s += "═══════════════════════════════════════════════════════════════════════════════\n\n"
 		s += m.updateOutput
 		s += "\n\n───────────────────────────────────────────────────────────────────────────────\n"
