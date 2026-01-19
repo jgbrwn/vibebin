@@ -1888,6 +1888,9 @@ echo "Node.js $(node --version) installed successfully"
 	motdScript := fmt.Sprintf(`#!/bin/bash
 # incus-manager custom MOTD
 
+# User home directory for tool paths
+USER_HOME="/home/%s"
+
 echo ""
 echo "═══════════════════════════════════════════════════════════════════════════════"
 echo "  Container: %s"
@@ -1901,11 +1904,11 @@ echo "  Installed Tools:"
 echo "    • Docker   $(docker --version 2>/dev/null | awk '{print $3}' | tr -d ',' || echo 'not found')"
 echo "    • Go       $(/usr/local/go/bin/go version 2>/dev/null | awk '{print $3}' | sed 's/go//' || echo 'not found')"
 echo "    • Node.js  $(node --version 2>/dev/null || echo 'not found')"
-echo "    • Bun      $(~/.bun/bin/bun --version 2>/dev/null || echo 'not found')"
-echo "    • Deno     $(~/.deno/bin/deno --version 2>/dev/null | head -1 | awk '{print $2}' || echo 'not found')"
-echo "    • uv       $(~/.local/bin/uv --version 2>/dev/null | awk '{print $2}' || echo 'not found')"
-echo "    • opencode $(~/.opencode/bin/opencode --version 2>/dev/null || echo 'not found')"
-echo "    • nanocode $(~/.bun/bin/nanocode --version 2>/dev/null || echo 'not found')"
+echo "    • Bun      $(${USER_HOME}/.bun/bin/bun --version 2>/dev/null || echo 'not found')"
+echo "    • Deno     $(${USER_HOME}/.deno/bin/deno --version 2>/dev/null | head -1 | awk '{print $2}' || echo 'not found')"
+echo "    • uv       $(${USER_HOME}/.local/bin/uv --version 2>/dev/null | awk '{print $2}' || echo 'not found')"
+echo "    • opencode $(${USER_HOME}/.opencode/bin/opencode --version 2>/dev/null || echo 'not found')"
+echo "    • nanocode $(${USER_HOME}/.bun/bin/nanocode --version 2>/dev/null || echo 'not found')"
 echo ""
 echo "  ─────────────────────────────────────────────────────────────────────────────"
 echo "  AI Coding Agents:"
@@ -1920,7 +1923,7 @@ echo "  ────────────────────────
 echo "  Documentation: https://github.com/jgbrwn/shelley-lxc"
 echo "═══════════════════════════════════════════════════════════════════════════════"
 echo ""
-`, containerName, domain, domain, domain)
+`, containerUser, containerName, domain, domain, domain)
 
 	tmpMotd, _ := os.CreateTemp("", "99-incus-manager")
 	tmpMotd.WriteString(motdScript)
