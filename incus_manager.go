@@ -3258,13 +3258,13 @@ func (m model) viewContainerDetail() string {
 	s += fmt.Sprintf("  App Port:     %d\n", c.AppPort)
 	s += fmt.Sprintf("  Created:      %s\n", c.CreatedAt.Format("2006-01-02 15:04:05"))
 	s += "\n"
-	s += fmt.Sprintf("  🌐 App URL:     https://%s\n", c.Domain)
+	s += fmt.Sprintf("  🌐 App URL:  https://%s\n", c.Domain)
 	s += fmt.Sprintf("  🤖 Code UI: https://code.%s\n", c.Domain)
 	hostIP := getHostPublicIP()
 	if hostIP == "" {
 		hostIP = "<host>"
 	}
-	s += fmt.Sprintf("  🔑 SSH:         ssh -p 2222 %s@%s\n", c.Name, hostIP)
+	s += fmt.Sprintf("  🔑 SSH:     ssh -p 2222 %s@%s\n", c.Name, hostIP)
 	s += "\n"
 	s += "───────────────────────────────────────────────────────────────────────────────\n"
 	s += "[s] Start/Stop  [r] Restart  [p] Change Port  [a] Change Auth\n"
