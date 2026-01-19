@@ -21,7 +21,7 @@ This project provides the infrastructure to self-host your own AI coding environ
 
 Each container is a fully persistent Linux sandbox running **Ubuntu 24.04 LTS (Noble)** or **Debian 13 (Trixie)**, with:
 
-- **[opencode](https://github.com/anomalyco/opencode)** and **[nanocode](https://github.com/nanogpt-community/nanocode)** - AI coding agents with terminal and web UI interfaces
+- **[opencode](https://github.com/anomalyco/opencode)**, **[nanocode](https://github.com/nanogpt-community/nanocode)**, and **[openhands](https://github.com/All-Hands-AI/OpenHands)** - AI coding agents with terminal and web UI interfaces
 - **AI coding web UI** accessible via HTTPS at `code.yourdomain.com` (Basic Auth protected)
 - **Your app/site** accessible via HTTPS at `yourdomain.com`
 - **SSH access** for direct terminal access to your sandbox (VS Code Remote SSH compatible)
@@ -30,7 +30,7 @@ Each container is a fully persistent Linux sandbox running **Ubuntu 24.04 LTS (N
 
 ### Use Cases
 
-- **AI-assisted development**: Use opencode/nanocode as your AI pair programmer with full system access
+- **AI-assisted development**: Use opencode/nanocode/openhands as your AI pair programmer with full system access
 - **Vibe coding**: Spin up isolated sandboxes for experimental projects
 - **App/site hosting**: Deploy and iterate on web applications
 - **Learning environments**: Safe, isolated Linux environments for experimentation
@@ -46,10 +46,11 @@ Each container is a fully persistent Linux sandbox running **Ubuntu 24.04 LTS (N
 | **Ubuntu/Debian** | Native Incus images (user choice during creation) |
 | **opencode** | Open source AI coding agent with terminal and web UI |
 | **nanocode** | NanoGPT-powered AI coding agent (fork of opencode) |
+| **openhands** | Full-featured AI coding agent from All-Hands-AI |
 
 ### AI Coding Agents
 
-This project installs both **opencode** and **nanocode** in each container:
+This project installs **opencode**, **nanocode**, and **openhands** in each container:
 
 #### opencode
 
@@ -67,7 +68,15 @@ This project installs both **opencode** and **nanocode** in each container:
 - Built-in NanoGPT MCP server
 - Interleaved thinking for reasoning models
 
-Both tools support terminal and web UI modes. Configure your LLM credentials on first run.
+#### openhands
+
+[OpenHands](https://github.com/All-Hands-AI/OpenHands) (formerly OpenDevin) is a powerful AI coding agent with:
+- Full agentic capabilities with file editing, terminal access, and web browsing
+- Support for multiple LLM providers (Anthropic, OpenAI, etc.)
+- Persistent workspace and history
+- Best used with Python 3.12 (installed automatically via uv)
+
+All tools support terminal and web UI modes. Configure your LLM credentials on first run.
 
 ## Components
 
@@ -187,6 +196,7 @@ During container creation, the following is automatically installed:
 - **uv** (Python package manager from Astral)
 - **opencode** (open source AI coding agent)
 - **nanocode** (NanoGPT-powered AI coding agent)
+- **openhands** (full-featured AI coding agent via uv with Python 3.12)
 - **Custom MOTD** (shows container info, URLs, and tool versions on SSH login)
 
 ## ⚠️ Required: SSHPiper Manual Setup (After First Run)
@@ -236,7 +246,7 @@ sudo incus_manager
 - `p` - Change app port
 - `a` - Change auth credentials
 - `S` - Snapshot management
-- `u` - Update opencode/nanocode
+- `u` - Update AI coding tools (opencode/nanocode/openhands)
 - `Esc` - Back to list
 
 **Snapshot View:**
@@ -265,12 +275,13 @@ sudo incus_manager
 ### AI Coding Agents
 - **opencode**: Open source, supports multiple LLM providers
 - **nanocode**: NanoGPT-optimized fork with built-in features
-- **Easy Configuration**: Both tools prompt for API keys on first run
-- **Web UI Access**: Start with `opencode serve` or `nanocode serve`
+- **openhands**: Full-featured AI agent with file editing, terminal, and web browsing
+- **Easy Configuration**: All tools prompt for API keys on first run
+- **Web UI Access**: Start any tool in serve mode on port 9999
 
-## Using opencode and nanocode
+## Using the AI Coding Tools
 
-After creating a container, SSH in and run either tool:
+After creating a container, SSH in and run any of the tools:
 
 ### Terminal Mode
 
@@ -283,33 +294,48 @@ opencode
 
 # Or run nanocode
 nanocode
+
+# Or run openhands (CLI mode)
+openhands
 ```
 
-Both tools will prompt you to configure your LLM provider and API key on first run.
+All tools will prompt you to configure your LLM provider and API key on first run.
 
 ### Web UI Mode
 
-To access the AI coding agent via web browser:
+To access the AI coding agent via web browser, first navigate to your project directory:
 
 ```bash
 # SSH to your container
 ssh -p 2222 container-name@host.example.com
 
-# Start opencode web UI (in screen for persistence)
+# Create or navigate to your project directory
+mkdir -p ~/myapp && cd ~/myapp
+
+# Start one of the web UIs (only one can run at a time on port 9999)
+
+# Option 1: opencode web UI
 screen -S code
 opencode serve --port 9999 --hostname 0.0.0.0
 
-# Or start nanocode web UI
+# Option 2: nanocode web UI
+screen -S code
 nanocode serve --port 9999 --hostname 0.0.0.0
+
+# Option 3: openhands web UI
+screen -S code
+openhands serve --mount-cwd --port 9999
 ```
 
 Then access via `https://code.yourdomain.com` (protected by Basic Auth credentials you set during container creation).
 
 Press `Ctrl+A, D` to detach from screen. Reattach with `screen -x code`.
 
+> **Note**: Only one web UI can run on port 9999 at a time. Stop the current one before starting another.
+
 ### Updating AI Tools
 
-From the container detail view in the TUI, press `u` to update both opencode and nanocode to their latest versions.
+From the container detail view in the TUI, press `u` to update opencode, nanocode, and openhands to their latest versions.
 
 ## SSH Access
 
@@ -363,7 +389,8 @@ Caddy will automatically obtain Let's Encrypt certificates for both domains.
 │  │  │                │  │                │              │     │
 │  │  │  ┌───────────┐ │  │  ┌───────────┐ │              │     │
 │  │  │  │ opencode/ │ │  │  │ opencode/ │ │              │     │
-│  │  │  │ nanocode  │ │  │  │ nanocode  │ │              │     │
+│  │  │  │ nanocode/ │ │  │  │ nanocode/ │ │              │     │
+│  │  │  │ openhands │ │  │  │ openhands │ │              │     │
 │  │  │  └───────────┘ │  │  └───────────┘ │              │     │
 │  │  │  ┌───────────┐ │  │  ┌───────────┐ │              │     │
 │  │  │  │ Your App  │ │  │  │ Your App  │ │              │     │
@@ -384,7 +411,7 @@ Caddy will automatically obtain Let's Encrypt certificates for both domains.
 ### How Traffic Flows
 
 1. **HTTPS requests** to `myapp.example.com` → Caddy → Container's app (port 8000)
-2. **HTTPS requests** to `code.myapp.example.com` → Caddy (with Basic Auth) → opencode/nanocode web UI (port 9999)
+2. **HTTPS requests** to `code.myapp.example.com` → Caddy (with Basic Auth) → AI coding web UI (port 9999)
 3. **SSH connections** to port 2222 as `myapp-example-com@host` → SSHPiper → Container's SSH as `ubuntu`/`debian`
 
 ### Caddy Configuration
@@ -437,10 +464,10 @@ incus info container-name
 - Ensure you're using port 2222: `ssh -p 2222 container-name@host`
 - Verify upstream config: `cat /var/lib/sshpiper/container-name/sshpiper_upstream`
 
-**opencode/nanocode not working:**
-- SSH to the container and run `opencode` or `nanocode` interactively
-- Both tools will prompt for API key configuration on first run
-- Check tool versions: `opencode --version` or `nanocode --version`
+**AI coding tools not working:**
+- SSH to the container and run `opencode`, `nanocode`, or `openhands` interactively
+- All tools will prompt for API key configuration on first run
+- Check tool versions: `opencode --version`, `nanocode --version`, `openhands --version`
 
 **Sync daemon issues:**
 ```bash
@@ -493,6 +520,7 @@ This project is licensed under the MIT License. See [LICENSE](LICENSE) for detai
 
 - **opencode**: [anomalyco/opencode](https://github.com/anomalyco/opencode) - MIT License
 - **nanocode**: [nanogpt-community/nanocode](https://github.com/nanogpt-community/nanocode) - Fork of opencode
+- **openhands**: [All-Hands-AI/OpenHands](https://github.com/All-Hands-AI/OpenHands) - MIT License
 - **Incus**: [linuxcontainers/incus](https://github.com/lxc/incus) - Apache 2.0 License
 - **Caddy**: [caddyserver/caddy](https://github.com/caddyserver/caddy) - Apache 2.0 License
 - **SSHPiper**: [tg123/sshpiper](https://github.com/tg123/sshpiper) - MIT License

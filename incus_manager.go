@@ -1883,6 +1883,14 @@ echo "Node.js $(node --version) installed successfully"
 		sendProgress("✅ nanocode installed")
 	}
 
+	// STEP 10b: Install openhands (requires uv)
+	sendProgress("Installing openhands...")
+	if err := userExec("~/.local/bin/uv tool install --python 3.12 openhands-ai"); err != nil {
+		sendProgress(fmt.Sprintf("Warning: openhands installation failed: %v", err))
+	} else {
+		sendProgress("✅ openhands installed")
+	}
+
 	// STEP 11: Configure custom MOTD
 	sendProgress("Configuring welcome message (MOTD)...")
 	motdScript := fmt.Sprintf(`#!/bin/bash
@@ -1901,21 +1909,26 @@ echo "  Code UI:  https://code.%s"
 echo ""
 echo "  ─────────────────────────────────────────────────────────────────────────────"
 echo "  Installed Tools:"
-echo "    • Docker   $(docker --version 2>/dev/null | awk '{print $3}' | tr -d ',' || echo 'not found')"
-echo "    • Go       $(/usr/local/go/bin/go version 2>/dev/null | awk '{print $3}' | sed 's/go//' || echo 'not found')"
-echo "    • Node.js  $(node --version 2>/dev/null || echo 'not found')"
-echo "    • Bun      $(${USER_HOME}/.bun/bin/bun --version 2>/dev/null || echo 'not found')"
-echo "    • Deno     $(${USER_HOME}/.deno/bin/deno --version 2>/dev/null | head -1 | awk '{print $2}' || echo 'not found')"
-echo "    • uv       $(${USER_HOME}/.local/bin/uv --version 2>/dev/null | awk '{print $2}' || echo 'not found')"
-echo "    • opencode $(${USER_HOME}/.opencode/bin/opencode --version 2>/dev/null || echo 'not found')"
-echo "    • nanocode $(${USER_HOME}/.bun/bin/nanocode --version 2>/dev/null || echo 'not found')"
+echo "    • Docker    $(docker --version 2>/dev/null | awk '{print $3}' | tr -d ',' || echo 'not found')"
+echo "    • Go        $(/usr/local/go/bin/go version 2>/dev/null | awk '{print $3}' | sed 's/go//' || echo 'not found')"
+echo "    • Node.js   $(node --version 2>/dev/null || echo 'not found')"
+echo "    • Bun       $(${USER_HOME}/.bun/bin/bun --version 2>/dev/null || echo 'not found')"
+echo "    • Deno      $(${USER_HOME}/.deno/bin/deno --version 2>/dev/null | head -1 | awk '{print $2}' || echo 'not found')"
+echo "    • uv        $(${USER_HOME}/.local/bin/uv --version 2>/dev/null | awk '{print $2}' || echo 'not found')"
+echo "    • opencode  $(${USER_HOME}/.opencode/bin/opencode --version 2>/dev/null || echo 'not found')"
+echo "    • nanocode  $(${USER_HOME}/.bun/bin/nanocode --version 2>/dev/null || echo 'not found')"
+echo "    • openhands $(${USER_HOME}/.local/bin/openhands --version 2>/dev/null | head -1 | awk '{print $2}' || echo 'not found')"
 echo ""
 echo "  ─────────────────────────────────────────────────────────────────────────────"
 echo "  AI Coding Agents:"
-echo "    Configure your LLM models/API keys/Base URLs within opencode or nanocode"
+echo "    Configure your LLM provider/API keys within each tool on first run."
+echo "    Note: Only one web UI can run on port 9999 at a time."
 echo ""
-echo "    To start opencode web UI: opencode serve --port 9999 --hostname 0.0.0.0"
-echo "    To start nanocode web UI: nanocode serve --port 9999 --hostname 0.0.0.0"
+echo "    First, cd to your project directory (e.g., cd ~/myapp)"
+echo ""
+echo "    opencode:  opencode serve --port 9999 --hostname 0.0.0.0"
+echo "    nanocode:  nanocode serve --port 9999 --hostname 0.0.0.0"
+echo "    openhands: openhands serve --mount-cwd --port 9999"
 echo ""
 echo "    Then access via: https://code.%s"
 echo ""
@@ -2028,12 +2041,13 @@ func updateToolsCmd(containerName, containerUser string) tea.Cmd {
 
 		// Step 1: Check for running processes
 		result += "Checking for running processes...\n"
-		runningProcs, _ := rootExec("pgrep -af 'opencode|nanocode' 2>/dev/null | grep -v pgrep || true")
+		runningProcs, _ := rootExec("pgrep -af 'opencode|nanocode|openhands' 2>/dev/null | grep -v pgrep || true")
 		if strings.TrimSpace(runningProcs) != "" {
 			result += "Found running processes:\n" + runningProcs + "\n"
-			result += "Stopping opencode/nanocode processes...\n"
+			result += "Stopping AI coding tool processes...\n"
 			rootExec("pkill -f 'opencode serve' 2>/dev/null || true")
 			rootExec("pkill -f 'nanocode serve' 2>/dev/null || true")
+			rootExec("pkill -f 'openhands serve' 2>/dev/null || true")
 			result += "✅ Processes stopped\n"
 		} else {
 			result += "No running processes found\n"
@@ -2050,9 +2064,14 @@ func updateToolsCmd(containerName, containerUser string) tea.Cmd {
 			v, _ := userExec("~/.bun/bin/nanocode --version 2>/dev/null || echo 'not installed'")
 			return v
 		}())
+		currentOpenhands := strings.TrimSpace(func() string {
+			v, _ := userExec("~/.local/bin/openhands --version 2>/dev/null | head -1 | awk '{print $2}' || echo 'not installed'")
+			return v
+		}())
 		
-		result += fmt.Sprintf("  Current opencode: %s\n", currentOpencode)
-		result += fmt.Sprintf("  Current nanocode: %s\n", currentNanocode)
+		result += fmt.Sprintf("  Current opencode:  %s\n", currentOpencode)
+		result += fmt.Sprintf("  Current nanocode:  %s\n", currentNanocode)
+		result += fmt.Sprintf("  Current openhands: %s\n", currentOpenhands)
 
 		// Step 3: Check latest available versions
 		result += "\nChecking latest available versions...\n"
@@ -2086,14 +2105,31 @@ func updateToolsCmd(containerName, containerUser string) tea.Cmd {
 				}
 			}
 		}
+
+		// Get latest openhands version from PyPI API
+		latestOpenhandsOut, err := exec.Command("bash", "-c", "curl -s https://pypi.org/pypi/openhands-ai/json | jq -r '.info.version // empty'").Output()
+		latestOpenhands := strings.TrimSpace(string(latestOpenhandsOut))
+		if err != nil || latestOpenhands == "" {
+			// Fallback to manual parsing if jq fails
+			rawOut, _ := exec.Command("curl", "-s", "https://pypi.org/pypi/openhands-ai/json").Output()
+			if idx := strings.Index(string(rawOut), `"version": "`); idx >= 0 {
+				start := idx + len(`"version": "`)
+				end := strings.Index(string(rawOut)[start:], `"`)
+				if end > 0 {
+					latestOpenhands = string(rawOut)[start : start+end]
+				}
+			}
+		}
 		
 		result += fmt.Sprintf("  Latest opencode:  %s\n", latestOpencode)
 		result += fmt.Sprintf("  Latest nanocode:  %s\n", latestNanocode)
+		result += fmt.Sprintf("  Latest openhands: %s\n", latestOpenhands)
 
 		opencodeNeedsUpdate := latestOpencode != "" && currentOpencode != latestOpencode && currentOpencode != "not installed"
 		nanocodeNeedsUpdate := latestNanocode != "" && currentNanocode != latestNanocode && currentNanocode != "not installed"
+		openhandsNeedsUpdate := latestOpenhands != "" && currentOpenhands != latestOpenhands && currentOpenhands != "not installed"
 		
-		var opencodeErr, nanocodeErr error
+		var opencodeErr, nanocodeErr, openhandsErr error
 
 		// Step 4: Update opencode if needed
 		if opencodeNeedsUpdate {
@@ -2145,12 +2181,38 @@ func updateToolsCmd(containerName, containerUser string) tea.Cmd {
 			result += fmt.Sprintf("\n✅ nanocode is already up to date (%s)\n", currentNanocode)
 		}
 
-		if opencodeErr != nil || nanocodeErr != nil {
+		// Step 6: Update openhands if needed
+		if openhandsNeedsUpdate {
+			result += fmt.Sprintf("\nUpdating openhands (%s -> %s)...\n", currentOpenhands, latestOpenhands)
+			openhandsOut, err := userExec("~/.local/bin/uv tool install --python 3.12 openhands-ai --force && ~/.local/bin/openhands --version")
+			result += openhandsOut
+			openhandsErr = err
+			if err != nil {
+				result += fmt.Sprintf("Warning: openhands update had issues: %v\n", err)
+			} else {
+				result += "✅ openhands updated\n"
+			}
+		} else if currentOpenhands == "not installed" {
+			result += "\nInstalling openhands...\n"
+			openhandsOut, err := userExec("~/.local/bin/uv tool install --python 3.12 openhands-ai && ~/.local/bin/openhands --version")
+			result += openhandsOut
+			openhandsErr = err
+			if err != nil {
+				result += fmt.Sprintf("Warning: openhands install had issues: %v\n", err)
+			} else {
+				result += "✅ openhands installed\n"
+			}
+		} else {
+			result += fmt.Sprintf("\n✅ openhands is already up to date (%s)\n", currentOpenhands)
+		}
+
+		if opencodeErr != nil || nanocodeErr != nil || openhandsErr != nil {
 			result += "\n⚠️ Update completed with some warnings"
 			return toolsUpdateMsg{output: result, success: false}
 		}
 
-		if !opencodeNeedsUpdate && !nanocodeNeedsUpdate && currentOpencode != "not installed" && currentNanocode != "not installed" {
+		if !opencodeNeedsUpdate && !nanocodeNeedsUpdate && !openhandsNeedsUpdate && 
+		   currentOpencode != "not installed" && currentNanocode != "not installed" && currentOpenhands != "not installed" {
 			result += "\n✅ All tools are already up to date!"
 		} else {
 			result += "\n✅ Update check complete!"
@@ -2159,7 +2221,6 @@ func updateToolsCmd(containerName, containerUser string) tea.Cmd {
 	}
 }
 
-// TUI Update method
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case installNeededMsg:
@@ -3024,7 +3085,7 @@ func (m model) View() string {
 		} else if strings.Contains(m.updateOutput, "failed") {
 			statusIcon = "❌"
 		}
-		s := fmt.Sprintf("%s UPDATE OPENCODE/NANOCODE: %s\n", statusIcon, containerName)
+		s := fmt.Sprintf("%s UPDATE AI CODING TOOLS: %s\n", statusIcon, containerName)
 		s += "═══════════════════════════════════════════════════════════════════════════════\n\n"
 		s += m.updateOutput
 		s += "\n\n───────────────────────────────────────────────────────────────────────────────\n"
