@@ -2019,14 +2019,21 @@ func updateToolsCmd(containerName, containerUser string) tea.Cmd {
 			return string(out), err
 		}
 
+		// Helper to run commands as root in container
+		rootExec := func(cmd string) (string, error) {
+			c := exec.Command("incus", "exec", containerName, "--", "bash", "-c", cmd)
+			out, err := c.CombinedOutput()
+			return string(out), err
+		}
+
 		// Step 1: Check for running processes
 		result += "Checking for running processes...\n"
-		runningProcs, _ := userExec("pgrep -fa 'opencode|nanocode' 2>/dev/null || true")
+		runningProcs, _ := rootExec("pgrep -af 'opencode|nanocode' 2>/dev/null | grep -v pgrep || true")
 		if strings.TrimSpace(runningProcs) != "" {
 			result += "Found running processes:\n" + runningProcs + "\n"
 			result += "Stopping opencode/nanocode processes...\n"
-			userExec("pkill -f 'opencode serve' 2>/dev/null || true")
-			userExec("pkill -f 'nanocode serve' 2>/dev/null || true")
+			rootExec("pkill -f 'opencode serve' 2>/dev/null || true")
+			rootExec("pkill -f 'nanocode serve' 2>/dev/null || true")
 			result += "✅ Processes stopped\n"
 		} else {
 			result += "No running processes found\n"
@@ -2050,25 +2057,33 @@ func updateToolsCmd(containerName, containerUser string) tea.Cmd {
 		// Step 3: Check latest available versions
 		result += "\nChecking latest available versions...\n"
 		
-		// Get latest opencode version from GitHub API
-		latestOpencodeOut, _ := exec.Command("curl", "-s", "https://api.github.com/repos/anomalyco/opencode/releases/latest").Output()
-		latestOpencode := ""
-		if idx := strings.Index(string(latestOpencodeOut), `"tag_name": "`); idx >= 0 {
-			start := idx + len(`"tag_name": "`)
-			end := strings.Index(string(latestOpencodeOut)[start:], `"`)
-			if end > 0 {
-				latestOpencode = strings.TrimPrefix(string(latestOpencodeOut)[start:start+end], "v")
+		// Get latest opencode version from GitHub API (use jq for reliable parsing)
+		latestOpencodeOut, err := exec.Command("bash", "-c", "curl -s https://api.github.com/repos/anomalyco/opencode/releases/latest | jq -r '.tag_name // empty' | sed 's/^v//'").Output()
+		latestOpencode := strings.TrimSpace(string(latestOpencodeOut))
+		if err != nil || latestOpencode == "" {
+			// Fallback to manual parsing if jq fails
+			rawOut, _ := exec.Command("curl", "-s", "https://api.github.com/repos/anomalyco/opencode/releases/latest").Output()
+			if idx := strings.Index(string(rawOut), `"tag_name": "`); idx >= 0 {
+				start := idx + len(`"tag_name": "`)
+				end := strings.Index(string(rawOut)[start:], `"`)
+				if end > 0 {
+					latestOpencode = strings.TrimPrefix(string(rawOut)[start:start+end], "v")
+				}
 			}
 		}
 		
 		// Get latest nanocode version from GitHub API
-		latestNanocodeOut, _ := exec.Command("curl", "-s", "https://api.github.com/repos/nanogpt-community/nanocode/releases/latest").Output()
-		latestNanocode := ""
-		if idx := strings.Index(string(latestNanocodeOut), `"tag_name": "`); idx >= 0 {
-			start := idx + len(`"tag_name": "`)
-			end := strings.Index(string(latestNanocodeOut)[start:], `"`)
-			if end > 0 {
-				latestNanocode = strings.TrimPrefix(string(latestNanocodeOut)[start:start+end], "v")
+		latestNanocodeOut, err := exec.Command("bash", "-c", "curl -s https://api.github.com/repos/nanogpt-community/nanocode/releases/latest | jq -r '.tag_name // empty' | sed 's/^v//'").Output()
+		latestNanocode := strings.TrimSpace(string(latestNanocodeOut))
+		if err != nil || latestNanocode == "" {
+			// Fallback to manual parsing if jq fails
+			rawOut, _ := exec.Command("curl", "-s", "https://api.github.com/repos/nanogpt-community/nanocode/releases/latest").Output()
+			if idx := strings.Index(string(rawOut), `"tag_name": "`); idx >= 0 {
+				start := idx + len(`"tag_name": "`)
+				end := strings.Index(string(rawOut)[start:], `"`)
+				if end > 0 {
+					latestNanocode = strings.TrimPrefix(string(rawOut)[start:start+end], "v")
+				}
 			}
 		}
 		
@@ -3258,7 +3273,7 @@ func (m model) viewContainerDetail() string {
 	s += fmt.Sprintf("  App Port:     %d\n", c.AppPort)
 	s += fmt.Sprintf("  Created:      %s\n", c.CreatedAt.Format("2006-01-02 15:04:05"))
 	s += "\n"
-	s += fmt.Sprintf("  🌐 App URL:  https://%s\n", c.Domain)
+	s += fmt.Sprintf("  🌐 App URL: https://%s\n", c.Domain)
 	s += fmt.Sprintf("  🤖 Code UI: https://code.%s\n", c.Domain)
 	hostIP := getHostPublicIP()
 	if hostIP == "" {
