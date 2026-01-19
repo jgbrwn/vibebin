@@ -30,8 +30,7 @@ const (
 	DBPath         = "/var/lib/shelley/containers.db"
 	PIDFile        = "/var/run/incus_manager.pid"
 	DefaultAppPort = 8000
-	ShelleyPort    = 9999
-	UploadPort     = 8099 // Igor file upload service port
+	CodeUIPort     = 9999 // opencode/nanocode web UI port
 )
 
 // Container image options
@@ -88,23 +87,17 @@ const (
 	stateCreateSSHKey
 	stateCreateAuthUser
 	stateCreateAuthPass
-	stateCreateProviderSelect  // Select LLM provider for shelley-cli
-	stateCreateAPIKey          // Enter API key for selected provider
-	stateCreateBaseURL         // Enter optional base URL for provider
 	stateContainerDetail
 	stateEditAppPort
 	stateEditAuthUser
 	stateEditAuthPass
-	stateUpdateShelley  // Update shelley-cli binary
+	stateUpdateTools  // Update opencode/nanocode
 	stateLogs
 	stateUntracked
 	stateImportContainer
 	stateImportImage           // Select image for imported container
 	stateImportAuthUser
 	stateImportAuthPass
-	stateImportProviderSelect  // Select LLM provider for import
-	stateImportAPIKey          // Enter API key for import
-	stateImportBaseURL         // Enter optional base URL for import
 	stateSnapshots          // View/manage snapshots
 	stateSnapshotCreate     // Create new snapshot (name input)
 	stateSnapshotRestore    // Confirm restore from snapshot
@@ -123,21 +116,6 @@ const (
 	dnsCloudflare
 	dnsDesec
 )
-
-// LLM Model configuration
-// LLM Provider configuration for shelley-cli
-type llmProvider struct {
-	ID            string // Provider identifier
-	Name          string // Display name
-	APIKeyEnvVar  string // Environment variable for API key
-	BaseURLEnvVar string // Environment variable for base URL (optional)
-}
-
-var availableProviders = []llmProvider{
-	{ID: "anthropic", Name: "Anthropic (Claude)", APIKeyEnvVar: "ANTHROPIC_API_KEY", BaseURLEnvVar: "ANTHROPIC_BASE_URL"},
-	{ID: "openai", Name: "OpenAI (GPT)", APIKeyEnvVar: "OPENAI_API_KEY", BaseURLEnvVar: "OPENAI_BASE_URL"},
-	{ID: "fireworks", Name: "Fireworks", APIKeyEnvVar: "FIREWORKS_API_KEY", BaseURLEnvVar: "FIREWORKS_BASE_URL"},
-}
 
 // Container entry from database
 type containerEntry struct {
@@ -171,7 +149,7 @@ type (
 	tickMsg            time.Time
 	createDoneMsg       struct{ err error; name string; output string }    // Container creation completed
 	clearStatusMsg      struct{}                                           // Clear status message
-	shelleyUpdateMsg    struct{ output string; success bool }              // shelley-cli update result
+	toolsUpdateMsg      struct{ output string; success bool }              // opencode/nanocode update result
 )
 
 // TUI Model
@@ -185,8 +163,8 @@ type model struct {
 	logContent    string
 	currentSvc    string
 	missing       []string
-	updateOutput  string  // Output from shelley-cli update command
-	updateSuccess bool    // Whether shelley-cli update succeeded
+	updateOutput  string  // Output from opencode/nanocode update command
+	updateSuccess bool    // Whether tools update succeeded
 
 	// Create flow state
 	newDomain        string
@@ -198,9 +176,6 @@ type model struct {
 	newSSHKey        string
 	newAuthUser      string
 	newAuthPass      string
-	newProviderIndex int    // Index into availableProviders
-	newAPIKey        string // API key for the selected provider
-	newBaseURL       string // Optional base URL for the provider
 
 	// Untracked containers
 	untrackedContainers []string
@@ -233,9 +208,9 @@ func initialModel() model {
 func (m model) isInputState() bool {
 	switch m.state {
 	case stateCreateDomain, stateCreateDNSToken, stateCreateAppPort, stateCreateSSHKey,
-		stateCreateAuthUser, stateCreateAuthPass, stateCreateAPIKey, stateCreateBaseURL,
+		stateCreateAuthUser, stateCreateAuthPass,
 		stateEditAppPort, stateEditAuthUser, stateEditAuthPass,
-		stateImportContainer, stateImportAuthUser, stateImportAuthPass, stateImportAPIKey, stateImportBaseURL,
+		stateImportContainer, stateImportAuthUser, stateImportAuthPass,
 		stateSnapshotCreate, stateDNSTokenEdit:
 		return true
 	}
@@ -873,7 +848,7 @@ func getUntrackedContainers(db *sql.DB) []string {
 }
 
 // createContainerWithProgress creates a container and sends progress updates via channel
-func createContainerWithProgress(db *sql.DB, domain string, image containerImage, appPort int, sshKey string, dnsProvider dnsProvider, dnsToken string, cfProxy bool, authUser, authPass string, providerIndex int, apiKey, baseURL string, progress chan<- string) error {
+func createContainerWithProgress(db *sql.DB, domain string, image containerImage, appPort int, sshKey string, dnsProvider dnsProvider, dnsToken string, cfProxy bool, authUser, authPass string, progress chan<- string) error {
 	sendProgress := func(msg string) {
 		if progress != nil {
 			select {
@@ -926,13 +901,13 @@ func createContainerWithProgress(db *sql.DB, domain string, image containerImage
 				sendProgress(fmt.Sprintf("✅ Created: %s -> %s", domain, hostIP))
 			}
 			
-			// Create shelley subdomain (never proxied - needs direct access for websockets)
-			shelleyDomain := "shelley." + domain
-			sendProgress(fmt.Sprintf("Creating A record for %s...", shelleyDomain))
-			if err := createDNSRecord(shelleyDomain, hostIP, dnsProvider, dnsToken, false); err != nil {
-				sendProgress(fmt.Sprintf("❌ DNS error for %s: %v", shelleyDomain, err))
+			// Create code subdomain (never proxied - needs direct access for websockets)
+			codeDomain := "code." + domain
+			sendProgress(fmt.Sprintf("Creating A record for %s...", codeDomain))
+			if err := createDNSRecord(codeDomain, hostIP, dnsProvider, dnsToken, false); err != nil {
+				sendProgress(fmt.Sprintf("❌ DNS error for %s: %v", codeDomain, err))
 			} else {
-				sendProgress(fmt.Sprintf("✅ Created: %s -> %s", shelleyDomain, hostIP))
+				sendProgress(fmt.Sprintf("✅ Created: %s -> %s", codeDomain, hostIP))
 			}
 			
 			// Wait for DNS propagation and verify
@@ -942,16 +917,16 @@ func createContainerWithProgress(db *sql.DB, domain string, image containerImage
 			// Verify DNS records
 			sendProgress("Verifying DNS records...")
 			mainOK := checkDNSResolvesToHost(domain)
-			shelleyOK := checkDNSResolvesToHost(shelleyDomain)
+			codeOK := checkDNSResolvesToHost(codeDomain)
 			if mainOK {
 				sendProgress(fmt.Sprintf("✅ DNS verified: %s", domain))
 			} else {
 				sendProgress(fmt.Sprintf("⚠️ DNS not yet propagated: %s", domain))
 			}
-			if shelleyOK {
-				sendProgress(fmt.Sprintf("✅ DNS verified: %s", shelleyDomain))
+			if codeOK {
+				sendProgress(fmt.Sprintf("✅ DNS verified: %s", codeDomain))
 			} else {
-				sendProgress(fmt.Sprintf("⚠️ DNS not yet propagated: %s", shelleyDomain))
+				sendProgress(fmt.Sprintf("⚠️ DNS not yet propagated: %s", codeDomain))
 			}
 		} else {
 			sendProgress("❌ Could not determine host public IP")
@@ -983,11 +958,10 @@ func createContainerWithProgress(db *sql.DB, domain string, image containerImage
 	// STEP 4: Configure the container user and install dependencies
 	sendProgress("Configuring container user and installing dependencies...")
 	containerUser := image.User()
-	screenSessionID, err := configureContainerEnvironment(name, containerUser, domain, providerIndex, apiKey, baseURL, sshKey, sendProgress)
+	err = configureContainerEnvironment(name, containerUser, domain, sshKey, sendProgress)
 	if err != nil {
 		sendProgress(fmt.Sprintf("Warning: Some configuration steps failed: %v", err))
 	}
-	_ = screenSessionID // Used in final status message
 
 	// STEP 5: Get container IP (SSH key setup is handled by configureSSHPiper later)
 	sendProgress("Getting container IP address...")
@@ -998,7 +972,7 @@ func createContainerWithProgress(db *sql.DB, domain string, image containerImage
 		sendProgress("Warning: Could not get container IP yet")
 	}
 
-	// STEP 7: Hash password for Shelley auth
+	// STEP 6: Hash password for basic auth
 	sendProgress("Configuring authentication...")
 	authHash := ""
 	if authUser != "" && authPass != "" {
@@ -1108,15 +1082,15 @@ func checkDNSResolvesToHost(domain string) bool {
 }
 
 // checkAllDNSForDomain checks if the domain resolves correctly to the host IP
-// checkAllDNSForDomain checks both the main domain and shelley subdomain
+// checkAllDNSForDomain checks both the main domain and code subdomain
 func checkAllDNSForDomain(domain string) bool {
 	mainOK := checkDNSResolvesToHost(domain)
-	shelleyOK := checkDNSResolvesToHost("shelley." + domain)
-	return mainOK && shelleyOK
+	codeOK := checkDNSResolvesToHost("code." + domain)
+	return mainOK && codeOK
 }
 
 // importContainer adds an existing Incus container to our management DB
-func importContainer(db *sql.DB, name, domain string, image containerImage, appPort int, authUser, authPass string, providerIndex int, apiKey, baseURL, sshKey string) error {
+func importContainer(db *sql.DB, name, domain string, image containerImage, appPort int, authUser, authPass, sshKey string) error {
 	// Verify container exists in Incus
 	_, ip, _, _ := getContainerStatus(name)
 	if ip == "" {
@@ -1126,7 +1100,7 @@ func importContainer(db *sql.DB, name, domain string, image containerImage, appP
 		_, ip, _, _ = getContainerStatus(name)
 	}
 
-	// Hash password for Shelley auth (used by Caddy basic auth)
+	// Hash password for basic auth (used by Caddy)
 	authHash := ""
 	if authUser != "" && authPass != "" {
 		hashOut, hashErr := exec.Command("caddy", "hash-password", "--plaintext", authPass).Output()
@@ -1149,9 +1123,9 @@ func importContainer(db *sql.DB, name, domain string, image containerImage, appP
 		configureSSHPiper(name, ip, containerUser, sshKey)
 	}
 
-	// Configure the container environment (user, Docker, Go, Node, shelley-cli)
+	// Configure the container environment (user, Docker, Go, Node, opencode, nanocode)
 	silentProgress := func(msg string) {} // Silent for imports
-	_, _ = configureContainerEnvironment(name, containerUser, domain, providerIndex, apiKey, baseURL, sshKey, silentProgress)
+	configureContainerEnvironment(name, containerUser, domain, sshKey, silentProgress)
 
 	return nil
 }
@@ -1491,8 +1465,7 @@ func updateCaddyConfig(name, domain, ip string, appPort int, authUser, authHash 
 
 	// Delete existing routes for this container (if any)
 	deleteCaddyRoute(client, caddyAPI, name+"-app")
-	deleteCaddyRoute(client, caddyAPI, name+"-shelley")
-	deleteCaddyRoute(client, caddyAPI, name+"-upload")
+	deleteCaddyRoute(client, caddyAPI, name+"-code")
 
 	// Add app route (public access to the container's app)
 	appRoute := map[string]interface{}{
@@ -1507,8 +1480,8 @@ func updateCaddyConfig(name, domain, ip string, appPort int, authUser, authHash 
 		return fmt.Errorf("failed to add app route: %w", err)
 	}
 
-	// Build shelley-cli web UI route handlers
-	var shelleyHandlers []map[string]interface{}
+	// Build code UI route handlers (for opencode/nanocode web UI)
+	var codeHandlers []map[string]interface{}
 
 	// Add basic auth handler if credentials are set
 	if authUser != "" && authHash != "" {
@@ -1520,74 +1493,27 @@ func updateCaddyConfig(name, domain, ip string, appPort int, authUser, authHash 
 						"username": authUser,
 						"password": authHash,
 					}},
-					"realm": "Shelley",
+					"realm": "Code",
 				},
 			},
 		}
-		shelleyHandlers = append(shelleyHandlers, authHandler)
+		codeHandlers = append(codeHandlers, authHandler)
 	}
 
-	// Add reverse proxy handler for shelley-cli web UI
-	shelleyHandlers = append(shelleyHandlers, map[string]interface{}{
+	// Add reverse proxy handler for opencode/nanocode web UI
+	codeHandlers = append(codeHandlers, map[string]interface{}{
 		"handler":   "reverse_proxy",
-		"upstreams": []map[string]string{{"dial": fmt.Sprintf("%s:%d", ip, ShelleyPort)}},
+		"upstreams": []map[string]string{{"dial": fmt.Sprintf("%s:%d", ip, CodeUIPort)}},
 	})
 
-	// Build upload route handlers (Igor file upload service)
-	// IMPORTANT: Upload route must be added BEFORE shelley route because it's more specific
-	// (has path match). Caddy evaluates routes in order, so more specific routes must come first.
-	var uploadHandlers []map[string]interface{}
-
-	// Add basic auth handler if credentials are set
-	if authUser != "" && authHash != "" {
-		authHandler := map[string]interface{}{
-			"handler": "authentication",
-			"providers": map[string]interface{}{
-				"http_basic": map[string]interface{}{
-					"accounts": []map[string]string{{
-						"username": authUser,
-						"password": authHash,
-					}},
-					"realm": "Upload",
-				},
-			},
-		}
-		uploadHandlers = append(uploadHandlers, authHandler)
+	// Add code UI route
+	codeRoute := map[string]interface{}{
+		"@id":   name + "-code",
+		"match": []map[string]interface{}{{"host": []string{"code." + domain}}},
+		"handle": codeHandlers,
 	}
-
-	// Add rewrite handler to strip /upload prefix before proxying
-	// Use Caddy's placeholder syntax for path manipulation
-	uploadHandlers = append(uploadHandlers, map[string]interface{}{
-		"handler": "rewrite",
-		"uri":     "{http.request.uri.path.strip_prefix(/upload)}",
-	})
-
-	// Add reverse proxy handler for Igor upload service
-	uploadHandlers = append(uploadHandlers, map[string]interface{}{
-		"handler":   "reverse_proxy",
-		"upstreams": []map[string]string{{"dial": fmt.Sprintf("%s:%d", ip, UploadPort)}},
-	})
-
-	uploadRoute := map[string]interface{}{
-		"@id": name + "-upload",
-		"match": []map[string]interface{}{{
-			"host": []string{"shelley." + domain},
-			"path": []string{"/upload", "/upload/*"},
-		}},
-		"handle": uploadHandlers,
-	}
-	if err := addCaddyRoute(client, caddyAPI, uploadRoute); err != nil {
-		return fmt.Errorf("failed to add upload route: %w", err)
-	}
-
-	// Add shelley route AFTER upload route (less specific, catches all other paths)
-	shelleyRoute := map[string]interface{}{
-		"@id":   name + "-shelley",
-		"match": []map[string]interface{}{{"host": []string{"shelley." + domain}}},
-		"handle": shelleyHandlers,
-	}
-	if err := addCaddyRoute(client, caddyAPI, shelleyRoute); err != nil {
-		return fmt.Errorf("failed to add shelley route: %w", err)
+	if err := addCaddyRoute(client, caddyAPI, codeRoute); err != nil {
+		return fmt.Errorf("failed to add code route: %w", err)
 	}
 
 	return nil
@@ -1655,8 +1581,7 @@ func removeCaddyConfig(name string) {
 	client := &http.Client{Timeout: 10 * time.Second}
 	caddyAPI := "http://localhost:2019"
 	deleteCaddyRoute(client, caddyAPI, name+"-app")
-	deleteCaddyRoute(client, caddyAPI, name+"-shelley")
-	deleteCaddyRoute(client, caddyAPI, name+"-upload")
+	deleteCaddyRoute(client, caddyAPI, name+"-code")
 }
 
 func updateContainerAppPort(db *sql.DB, name string, newPort int) error {
@@ -1785,26 +1710,34 @@ func configureSSHPiper(name, ip, containerUser, userPublicKey string) {
 }
 
 // configureContainerEnvironment sets up the container with all required software and configuration
-// This includes: user setup, Docker, Go, Node.js, shelley-cli, and API key configuration
-// Returns the screen session ID for shelley serve, or empty string if not started
-func configureContainerEnvironment(containerName, containerUser, domain string, providerIndex int, apiKey, baseURL, sshKey string, sendProgress func(string)) (string, error) {
-	// Helper to run commands in container as root
+// This includes: user setup, Docker, Go, Node.js, uv, bun, deno, opencode, and nanocode
+func configureContainerEnvironment(containerName, containerUser, domain, sshKey string, sendProgress func(string)) error {
+	// Helper to run commands in container as root with error handling
 	rootExec := func(args ...string) error {
 		cmd := exec.Command("incus", append([]string{"exec", containerName, "--"}, args...)...)
-		return cmd.Run()
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("%s: %s", err, string(out))
+		}
+		return nil
 	}
 
 	// Helper to run commands in container as the container user
-	// Pass a single shell command string
 	userExec := func(shellCmd string) error {
 		cmd := exec.Command("incus", "exec", containerName, "--", "su", "-", containerUser, "-c", shellCmd)
 		return cmd.Run()
 	}
 
+	userHome := fmt.Sprintf("/home/%s", containerUser)
+
 	// STEP 1: Ensure the container user exists with passwordless sudo
 	sendProgress(fmt.Sprintf("Ensuring user '%s' exists with sudo access...", containerUser))
-	rootExec("apt-get", "update")
-	rootExec("apt-get", "install", "-y", "sudo", "curl", "wget", "git", "make", "screen", "openssh-server")
+	if err := rootExec("apt-get", "update"); err != nil {
+		sendProgress(fmt.Sprintf("Warning: apt-get update failed: %v", err))
+	}
+	if err := rootExec("apt-get", "install", "-y", "sudo", "curl", "wget", "git", "make", "screen", "openssh-server", "unzip"); err != nil {
+		sendProgress(fmt.Sprintf("Warning: Failed to install base packages: %v", err))
+	}
 	
 	// Create user if doesn't exist, add to sudo group
 	rootExec("id", containerUser) // Check if exists
@@ -1824,14 +1757,11 @@ func configureContainerEnvironment(containerName, containerUser, domain string, 
 
 	// STEP 2: Configure SSH server security
 	sendProgress("Configuring SSH access...")
-	// Harden sshd_config: disable root login and password auth
 	rootExec("sed", "-i", "s/^#*PermitRootLogin.*/PermitRootLogin no/", "/etc/ssh/sshd_config")
 	rootExec("sed", "-i", "s/^#*PasswordAuthentication.*/PasswordAuthentication no/", "/etc/ssh/sshd_config")
-	// Enable and start SSH service
 	rootExec("systemctl", "enable", "--now", "ssh")
 
 	// Set up SSH key for the user
-	userHome := fmt.Sprintf("/home/%s", containerUser)
 	sshDir := userHome + "/.ssh"
 	rootExec("mkdir", "-p", sshDir)
 	if sshKey != "" {
@@ -1849,14 +1779,22 @@ func configureContainerEnvironment(containerName, containerUser, domain string, 
 
 	// STEP 3: Install Docker
 	sendProgress("Installing Docker...")
-	rootExec("sh", "-c", "curl -fsSL https://get.docker.com | sh")
-	rootExec("usermod", "-aG", "docker", containerUser)
+	dockerScript := `
+set -e
+curl -fsSL https://get.docker.com | sh
+echo "Docker installed successfully"
+`
+	if err := runScriptInContainer(containerName, dockerScript, "install-docker.sh"); err != nil {
+		sendProgress(fmt.Sprintf("Warning: Docker installation failed: %v", err))
+	} else {
+		rootExec("usermod", "-aG", "docker", containerUser)
+		sendProgress("✅ Docker installed")
+	}
 
-	// STEP 4: Install Go (latest version, detect architecture)
+	// STEP 4: Install Go (latest version)
 	sendProgress("Installing Go (latest version)...")
-	// Get latest Go version from go.dev - run as root for reliability
 	goInstallScript := `
-set -ex
+set -e
 ARCH=$(uname -m)
 case $ARCH in
     x86_64) GOARCH="amd64" ;;
@@ -1864,7 +1802,6 @@ case $ARCH in
     *) echo "Unsupported architecture: $ARCH"; exit 1 ;;
 esac
 
-# Get latest Go version
 GO_VERSION=$(curl -sL 'https://go.dev/VERSION?m=text' | head -1)
 if [ -z "$GO_VERSION" ]; then
     GO_VERSION="go1.23.5"
@@ -1877,251 +1814,210 @@ tar -C /usr/local -xzf "${GO_VERSION}.linux-${GOARCH}.tar.gz"
 rm -f "${GO_VERSION}.linux-${GOARCH}.tar.gz"
 echo "Go ${GO_VERSION} installed successfully"
 `
-	tmpGoScript, _ := os.CreateTemp("", "install-go.sh")
-	tmpGoScript.WriteString(goInstallScript)
-	tmpGoScript.Close()
-	exec.Command("incus", "file", "push", tmpGoScript.Name(), containerName+"/tmp/install-go.sh").Run()
-	os.Remove(tmpGoScript.Name())
-	rootExec("chmod", "+x", "/tmp/install-go.sh")
-	rootExec("/tmp/install-go.sh") // Run as root since it installs to /usr/local
-
-	// Add Go to PATH in bashrc
-	goPathLine := "export PATH=$PATH:/usr/local/go/bin:$HOME/go/bin"
-	userExec("grep -q 'go/bin' ~/.bashrc || echo '" + goPathLine + "' >> ~/.bashrc")
+	if err := runScriptInContainer(containerName, goInstallScript, "install-go.sh"); err != nil {
+		sendProgress(fmt.Sprintf("Warning: Go installation failed: %v", err))
+	} else {
+		sendProgress("✅ Go installed")
+	}
+	userExec("grep -q 'go/bin' ~/.bashrc || echo 'export PATH=$PATH:/usr/local/go/bin:$HOME/go/bin' >> ~/.bashrc")
 
 	// STEP 5: Install Node.js (latest LTS)
 	sendProgress("Installing Node.js (latest LTS)...")
 	nodeInstallScript := `
-set -ex
+set -e
 curl -fsSL https://deb.nodesource.com/setup_lts.x | bash -
 apt-get install -y nodejs
 echo "Node.js $(node --version) installed successfully"
 `
-	tmpNodeScript, _ := os.CreateTemp("", "install-node.sh")
-	tmpNodeScript.WriteString(nodeInstallScript)
-	tmpNodeScript.Close()
-	exec.Command("incus", "file", "push", tmpNodeScript.Name(), containerName+"/tmp/install-node.sh").Run()
-	os.Remove(tmpNodeScript.Name())
-	rootExec("chmod", "+x", "/tmp/install-node.sh")
-	rootExec("/tmp/install-node.sh") // Run as root for apt operations
-
-	// STEP 6: Install shelley-cli and igor service
-	sendProgress("Installing shelley-cli...")
-	shelleyInstallScript := fmt.Sprintf(`
-set -ex
-export PATH=$PATH:/usr/local/go/bin
-cd /home/%s
-rm -rf shelley-cli
-git clone https://github.com/davidcjones79/shelley-cli.git
-cd shelley-cli
-make
-# Copy binary to go/bin so it's in PATH
-mkdir -p /home/%s/go/bin
-cp bin/shelley /home/%s/go/bin/
-chown %s:%s /home/%s/go/bin/shelley
-
-# Create igor.service with correct user (not exedev)
-cat > /etc/systemd/system/igor.service << 'IGOREOF'
-[Unit]
-Description=Igor - Shelley File Transfer Assistant
-After=network.target
-
-[Service]
-Type=exec
-User=%s
-Group=%s
-WorkingDirectory=/home/%s
-ExecStart=/home/%s/go/bin/shelley igor -port 8099
-Restart=on-failure
-RestartSec=5
-Environment=HOME=/home/%s
-Environment=USER=%s
-Environment=PATH=/usr/local/bin:/usr/bin:/bin:/home/%s/go/bin
-
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=igor
-
-[Install]
-WantedBy=multi-user.target
-IGOREOF
-
-systemctl daemon-reload
-systemctl enable --now igor
-
-echo "shelley-cli and igor service installed successfully"
-`, containerUser, containerUser, containerUser, containerUser, containerUser, containerUser, containerUser, containerUser, containerUser, containerUser, containerUser, containerUser, containerUser, containerUser)
-	tmpShelleyScript, _ := os.CreateTemp("", "install-shelley.sh")
-	tmpShelleyScript.WriteString(shelleyInstallScript)
-	tmpShelleyScript.Close()
-	exec.Command("incus", "file", "push", tmpShelleyScript.Name(), containerName+"/tmp/install-shelley.sh").Run()
-	os.Remove(tmpShelleyScript.Name())
-	rootExec("chmod", "+x", "/tmp/install-shelley.sh")
-	rootExec("/tmp/install-shelley.sh") // Run as root so we can set ownership
-
-	// STEP 7: Configure API key and base URL in bashrc
-	sendProgress("Configuring LLM provider credentials...")
-	if providerIndex >= 0 && providerIndex < len(availableProviders) {
-		provider := availableProviders[providerIndex]
-		
-		bashrcPath := userHome + "/.bashrc"
-		readCmd := exec.Command("incus", "exec", containerName, "--", "cat", bashrcPath)
-		currentBashrc, _ := readCmd.Output()
-		bashrcContent := string(currentBashrc)
-		
-		// Add API key
-		if apiKey != "" {
-			exportLine := fmt.Sprintf("export %s='%s'", provider.APIKeyEnvVar, apiKey)
-			if !strings.Contains(bashrcContent, provider.APIKeyEnvVar+"=") {
-				bashrcContent += "\n" + exportLine
-			}
-		}
-		
-		// Add base URL if provided
-		if baseURL != "" && provider.BaseURLEnvVar != "" {
-			exportLine := fmt.Sprintf("export %s='%s'", provider.BaseURLEnvVar, baseURL)
-			if !strings.Contains(bashrcContent, provider.BaseURLEnvVar+"=") {
-				bashrcContent += "\n" + exportLine
-			}
-		}
-		
-		// Write updated bashrc
-		tmpBashrc, err := os.CreateTemp("", "bashrc")
-		if err == nil {
-			tmpBashrc.WriteString(bashrcContent)
-			tmpBashrc.Close()
-			exec.Command("incus", "file", "push", tmpBashrc.Name(), containerName+bashrcPath).Run()
-			rootExec("chown", containerUser+":"+containerUser, bashrcPath)
-			os.Remove(tmpBashrc.Name())
-		}
+	if err := runScriptInContainer(containerName, nodeInstallScript, "install-node.sh"); err != nil {
+		sendProgress(fmt.Sprintf("Warning: Node.js installation failed: %v", err))
+	} else {
+		sendProgress("✅ Node.js installed")
 	}
 
-	// STEP 8: Configure custom MOTD
+	// STEP 6: Install uv (Python package manager)
+	sendProgress("Installing uv (Python package manager)...")
+	uvInstallScript := `
+set -e
+curl -LsSf https://astral.sh/uv/install.sh | sh
+echo "uv installed successfully"
+`
+	// Run as user since it installs to ~/.local/bin
+	tmpScript, _ := os.CreateTemp("", "install-uv.sh")
+	tmpScript.WriteString(uvInstallScript)
+	tmpScript.Close()
+	exec.Command("incus", "file", "push", tmpScript.Name(), containerName+"/tmp/install-uv.sh").Run()
+	os.Remove(tmpScript.Name())
+	rootExec("chmod", "+x", "/tmp/install-uv.sh")
+	if err := userExec("/tmp/install-uv.sh"); err != nil {
+		sendProgress(fmt.Sprintf("Warning: uv installation failed: %v", err))
+	} else {
+		sendProgress("✅ uv installed")
+	}
+	// Add to PATH
+	userExec("grep -q '.local/bin' ~/.bashrc || echo 'export PATH=$PATH:$HOME/.local/bin' >> ~/.bashrc")
+
+	// STEP 7: Install Bun
+	sendProgress("Installing Bun...")
+	bunInstallScript := `
+set -e
+curl -fsSL https://bun.sh/install | bash
+echo "Bun installed successfully"
+`
+	tmpScript, _ = os.CreateTemp("", "install-bun.sh")
+	tmpScript.WriteString(bunInstallScript)
+	tmpScript.Close()
+	exec.Command("incus", "file", "push", tmpScript.Name(), containerName+"/tmp/install-bun.sh").Run()
+	os.Remove(tmpScript.Name())
+	rootExec("chmod", "+x", "/tmp/install-bun.sh")
+	if err := userExec("/tmp/install-bun.sh"); err != nil {
+		sendProgress(fmt.Sprintf("Warning: Bun installation failed: %v", err))
+	} else {
+		sendProgress("✅ Bun installed")
+	}
+	// Add to PATH
+	userExec("grep -q '.bun/bin' ~/.bashrc || echo 'export PATH=$PATH:$HOME/.bun/bin' >> ~/.bashrc")
+
+	// STEP 8: Install Deno
+	sendProgress("Installing Deno...")
+	denoInstallScript := `
+set -e
+curl -fsSL https://deno.land/install.sh | sh
+echo "Deno installed successfully"
+`
+	tmpScript, _ = os.CreateTemp("", "install-deno.sh")
+	tmpScript.WriteString(denoInstallScript)
+	tmpScript.Close()
+	exec.Command("incus", "file", "push", tmpScript.Name(), containerName+"/tmp/install-deno.sh").Run()
+	os.Remove(tmpScript.Name())
+	rootExec("chmod", "+x", "/tmp/install-deno.sh")
+	if err := userExec("/tmp/install-deno.sh"); err != nil {
+		sendProgress(fmt.Sprintf("Warning: Deno installation failed: %v", err))
+	} else {
+		sendProgress("✅ Deno installed")
+	}
+	// Add to PATH
+	userExec("grep -q '.deno/bin' ~/.bashrc || echo 'export PATH=$PATH:$HOME/.deno/bin' >> ~/.bashrc")
+
+	// STEP 9: Install opencode
+	sendProgress("Installing opencode...")
+	opencodeInstallScript := `
+set -e
+export PATH=$PATH:$HOME/.local/bin:$HOME/.bun/bin
+curl -fsSL https://opencode.ai/install | bash
+echo "opencode installed successfully"
+`
+	tmpScript, _ = os.CreateTemp("", "install-opencode.sh")
+	tmpScript.WriteString(opencodeInstallScript)
+	tmpScript.Close()
+	exec.Command("incus", "file", "push", tmpScript.Name(), containerName+"/tmp/install-opencode.sh").Run()
+	os.Remove(tmpScript.Name())
+	rootExec("chmod", "+x", "/tmp/install-opencode.sh")
+	if err := userExec("/tmp/install-opencode.sh"); err != nil {
+		sendProgress(fmt.Sprintf("Warning: opencode installation failed: %v", err))
+	} else {
+		sendProgress("✅ opencode installed")
+	}
+	// Add opencode to PATH
+	userExec("grep -q '.opencode/bin' ~/.bashrc || echo 'export PATH=$PATH:$HOME/.opencode/bin' >> ~/.bashrc")
+
+	// STEP 10: Install nanocode
+	sendProgress("Installing nanocode...")
+	nanocodeInstallScript := `
+set -e
+export PATH=$PATH:$HOME/.bun/bin:$HOME/.local/bin
+# Use bun to install nanocode globally
+bun i -g nanocode@latest
+echo "nanocode installed successfully"
+`
+	tmpScript, _ = os.CreateTemp("", "install-nanocode.sh")
+	tmpScript.WriteString(nanocodeInstallScript)
+	tmpScript.Close()
+	exec.Command("incus", "file", "push", tmpScript.Name(), containerName+"/tmp/install-nanocode.sh").Run()
+	os.Remove(tmpScript.Name())
+	rootExec("chmod", "+x", "/tmp/install-nanocode.sh")
+	if err := userExec("/tmp/install-nanocode.sh"); err != nil {
+		sendProgress(fmt.Sprintf("Warning: nanocode installation failed: %v", err))
+	} else {
+		sendProgress("✅ nanocode installed")
+	}
+
+	// STEP 11: Configure custom MOTD
 	sendProgress("Configuring welcome message (MOTD)...")
 	motdScript := fmt.Sprintf(`#!/bin/bash
-# shelley-lxc custom MOTD
+# incus-manager custom MOTD
 
 echo ""
 echo "═══════════════════════════════════════════════════════════════════════════════"
-echo "  shelley-lxc Container: %s"
+echo "  Container: %s"
 echo "═══════════════════════════════════════════════════════════════════════════════"
 echo ""
-echo "  Domain:     https://%s"
-echo "  Shelley UI: https://shelley.%s"
-echo "  Upload:     https://shelley.%s/upload"
+echo "  Domain:   https://%s"
+echo "  Code UI:  https://code.%s"
 echo ""
 echo "  ─────────────────────────────────────────────────────────────────────────────"
 echo "  Installed Tools:"
-echo "    • Docker      $(docker --version 2>/dev/null | awk '{print $3}' | tr -d ',' || echo 'not found')"
-echo "    • Go          $(/usr/local/go/bin/go version 2>/dev/null | awk '{print $3}' | sed 's/go//' || echo 'not found')"
-echo "    • Node.js     $(node --version 2>/dev/null || echo 'not found')"
-echo "    • shelley-cli $(/home/%s/go/bin/shelley version 2>/dev/null | grep '"commit"' | sed 's/.*: *"\([^"]*\)".*/\1/' | cut -c1-8 || echo 'installed')"
+echo "    • Docker   $(docker --version 2>/dev/null | awk '{print $3}' | tr -d ',' || echo 'not found')"
+echo "    • Go       $(/usr/local/go/bin/go version 2>/dev/null | awk '{print $3}' | sed 's/go//' || echo 'not found')"
+echo "    • Node.js  $(node --version 2>/dev/null || echo 'not found')"
+echo "    • Bun      $(~/.bun/bin/bun --version 2>/dev/null || echo 'not found')"
+echo "    • Deno     $(~/.deno/bin/deno --version 2>/dev/null | head -1 | awk '{print $2}' || echo 'not found')"
+echo "    • uv       $(~/.local/bin/uv --version 2>/dev/null | awk '{print $2}' || echo 'not found')"
+echo "    • opencode $(~/.opencode/bin/opencode --version 2>/dev/null || echo 'not found')"
+echo "    • nanocode $(~/.bun/bin/nanocode --version 2>/dev/null || echo 'not found')"
 echo ""
 echo "  ─────────────────────────────────────────────────────────────────────────────"
-echo "  shelley serve Status:"
-# Check screen sessions for the container user (MOTD runs as root, screen is per-user)
-SCREEN_SESSION=$(su - %s -c 'screen -ls 2>/dev/null' | grep shelley | awk '{print $1}')
-if [ -n "$SCREEN_SESSION" ]; then
-    echo "    Running in screen session: $SCREEN_SESSION"
-    echo "    Attach with: screen -x $SCREEN_SESSION"
-else
-    echo "    Not running (start with: screen -dmS shelley ~/shelley-launcher.sh)"
-fi
-echo "    Log file: ~/shelley-serve.log"
+echo "  AI Coding Agents:"
+echo "    Configure your LLM models/API keys/Base URLs within opencode or nanocode"
+echo ""
+echo "    To start opencode web UI: opencode serve --port 9999 --hostname 0.0.0.0"
+echo "    To start nanocode web UI: nanocode serve --port 9999 --hostname 0.0.0.0"
+echo ""
+echo "    Then access via: https://code.%s"
 echo ""
 echo "  ─────────────────────────────────────────────────────────────────────────────"
 echo "  Documentation: https://github.com/jgbrwn/shelley-lxc"
 echo "═══════════════════════════════════════════════════════════════════════════════"
 echo ""
-`, containerName, domain, domain, domain, containerUser, containerUser)
+`, containerName, domain, domain, domain)
 
-	tmpMotd, _ := os.CreateTemp("", "99-shelley-lxc")
+	tmpMotd, _ := os.CreateTemp("", "99-incus-manager")
 	tmpMotd.WriteString(motdScript)
 	tmpMotd.Close()
-	exec.Command("incus", "file", "push", tmpMotd.Name(), containerName+"/etc/update-motd.d/99-shelley-lxc").Run()
+	exec.Command("incus", "file", "push", tmpMotd.Name(), containerName+"/etc/update-motd.d/99-incus-manager").Run()
 	os.Remove(tmpMotd.Name())
-	rootExec("chmod", "+x", "/etc/update-motd.d/99-shelley-lxc")
-
-	// STEP 9: Start shelley serve in a screen session
-	sendProgress("Starting shelley serve in screen session...")
-	
-	// Wait a moment for systemd and other services to fully settle
-	time.Sleep(3 * time.Second)
-	
-	// Create a launcher script that sources bashrc and runs shelley serve
-	launcherScript := `#!/bin/bash
-source ~/.bashrc
-export PATH=$PATH:/usr/local/go/bin:$HOME/go/bin
-cd ~
-shelley serve 2>&1 | tee ~/shelley-serve.log
-# Keep shell alive if shelley exits
-exec bash
-`
-	tmpLauncher, _ := os.CreateTemp("", "shelley-launcher.sh")
-	tmpLauncher.WriteString(launcherScript)
-	tmpLauncher.Close()
-	exec.Command("incus", "file", "push", tmpLauncher.Name(), containerName+userHome+"/shelley-launcher.sh").Run()
-	os.Remove(tmpLauncher.Name())
-	rootExec("chmod", "+x", userHome+"/shelley-launcher.sh")
-	rootExec("chown", containerUser+":"+containerUser, userHome+"/shelley-launcher.sh")
-
-	// Start shelley serve in a detached screen session named 'shelley'
-	startScreenScript := fmt.Sprintf(`#!/bin/bash
-set -x  # Debug output
-export PATH=$PATH:/usr/local/go/bin:$HOME/go/bin
-cd ~
-echo "Current user: $(whoami)"
-echo "Home directory: $HOME"
-echo "Checking if launcher script exists..."
-ls -la %s/shelley-launcher.sh
-echo "Starting screen session..."
-screen -dmS shelley bash -c '%s/shelley-launcher.sh; exec bash'
-echo "Waiting for screen to start..."
-sleep 5
-echo "Checking screen sessions..."
-screen -ls
-screen -ls | grep shelley | awk '{print $1}'
-`, userHome, userHome)
-	tmpScreenScript, _ := os.CreateTemp("", "start-screen.sh")
-	tmpScreenScript.WriteString(startScreenScript)
-	tmpScreenScript.Close()
-	exec.Command("incus", "file", "push", "--mode=0755", tmpScreenScript.Name(), containerName+"/tmp/start-screen.sh").Run()
-	os.Remove(tmpScreenScript.Name())
-	
-	// Run the script and capture the screen session ID
-	screenCmd := exec.Command("incus", "exec", containerName, "--", "su", "-", containerUser, "-c", "/tmp/start-screen.sh")
-	screenOutput, screenErr := screenCmd.CombinedOutput()
-	screenSessionID := ""
-	
-	if screenErr != nil {
-		sendProgress(fmt.Sprintf("Warning: screen command failed: %v", screenErr))
-		sendProgress(fmt.Sprintf("Output: %s", string(screenOutput)))
-	} else {
-		// Parse output to find session ID (last non-empty line should be session ID)
-		lines := strings.Split(strings.TrimSpace(string(screenOutput)), "\n")
-		for i := len(lines) - 1; i >= 0; i-- {
-			if strings.Contains(lines[i], ".") && strings.Contains(lines[i], "shelley") {
-				screenSessionID = strings.TrimSpace(lines[i])
-				break
-			}
-		}
-	}
-	
-	if screenSessionID != "" {
-		sendProgress(fmt.Sprintf("shelley serve running in screen session: %s", screenSessionID))
-		sendProgress(fmt.Sprintf("To attach: ssh to container then run: screen -x %s", screenSessionID))
-		sendProgress("Log file: ~/shelley-serve.log")
-	} else {
-		sendProgress("Warning: Could not determine screen session ID")
-		sendProgress("You may need to start shelley serve manually after SSH'ing in")
-	}
+	rootExec("chmod", "+x", "/etc/update-motd.d/99-incus-manager")
 
 	sendProgress("Container environment configuration complete!")
-	return screenSessionID, nil
+	return nil
+}
+
+// runScriptInContainer is a helper to run a script in the container as root
+func runScriptInContainer(containerName, script, scriptName string) error {
+	tmpScript, err := os.CreateTemp("", scriptName)
+	if err != nil {
+		return err
+	}
+	tmpScript.WriteString(script)
+	tmpScript.Close()
+	defer os.Remove(tmpScript.Name())
+
+	if err := exec.Command("incus", "file", "push", tmpScript.Name(), containerName+"/tmp/"+scriptName).Run(); err != nil {
+		return err
+	}
+	if err := exec.Command("incus", "exec", containerName, "--", "chmod", "+x", "/tmp/"+scriptName).Run(); err != nil {
+		return err
+	}
+	cmd := exec.Command("incus", "exec", containerName, "--", "/tmp/"+scriptName)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%s: %s", err, string(out))
+	}
+	return nil
 }
 
 // createContainerAsync creates a container asynchronously and returns progress/done messages
-func createContainerAsync(db *sql.DB, domain string, image containerImage, appPort int, sshKey string, dnsProvider dnsProvider, dnsToken string, cfProxy bool, authUser, authPass string, providerIndex int, apiKey, baseURL string) tea.Cmd {
+func createContainerAsync(db *sql.DB, domain string, image containerImage, appPort int, sshKey string, dnsProvider dnsProvider, dnsToken string, cfProxy bool, authUser, authPass string) tea.Cmd {
 	return func() tea.Msg {
 		// Create a channel to collect progress messages
 		progressChan := make(chan string, 100)
@@ -2129,7 +2025,7 @@ func createContainerAsync(db *sql.DB, domain string, image containerImage, appPo
 
 		// Run creation in background
 		go func() {
-			err := createContainerWithProgress(db, domain, image, appPort, sshKey, dnsProvider, dnsToken, cfProxy, authUser, authPass, providerIndex, apiKey, baseURL, progressChan)
+			err := createContainerWithProgress(db, domain, image, appPort, sshKey, dnsProvider, dnsToken, cfProxy, authUser, authPass, progressChan)
 			close(progressChan)
 			doneChan <- err
 		}()
@@ -2167,167 +2063,74 @@ func streamLogsCmd(service string) tea.Cmd {
 	}
 }
 
-// updateShelleyCmd updates shelley-cli on a container by rebuilding from source
-func updateShelleyCmd(containerName, containerUser string) tea.Cmd {
+// updateToolsCmd updates opencode and nanocode on a container
+func updateToolsCmd(containerName, containerUser string) tea.Cmd {
 	return func() tea.Msg {
-		userHome := "/home/" + containerUser
 		result := ""
 
-		// Step 1: Check if update is needed by comparing commits
-		// Get local commit - shelley version outputs JSON like: "commit": "abc123..."
-		checkScript := userHome + "/go/bin/shelley version 2>/dev/null"
-		localCommitCmd := exec.Command("incus", "exec", containerName, "--", "su", "-", containerUser, "-c", checkScript)
-		localCommitOut, _ := localCommitCmd.Output()
-		
-		// Extract commit hash from JSON output
-		localHash := ""
-		if idx := strings.Index(string(localCommitOut), `"commit": "`); idx >= 0 {
-			start := idx + len(`"commit": "`)
-			end := strings.Index(string(localCommitOut)[start:], `"`)
-			if end > 0 {
-				localHash = string(localCommitOut)[start : start+end]
-			}
-		}
-		
-		// Get latest commit from GitHub API
-		remoteCommitCmd := exec.Command("curl", "-s", "https://api.github.com/repos/davidcjones79/shelley-cli/commits/main")
-		remoteCommitOut, _ := remoteCommitCmd.Output()
-		remoteHash := ""
-		if idx := strings.Index(string(remoteCommitOut), `"sha": "`); idx >= 0 {
-			start := idx + len(`"sha": "`)
-			end := strings.Index(string(remoteCommitOut)[start:], `"`)
-			if end > 0 {
-				remoteHash = string(remoteCommitOut)[start : start+end]
-			}
-		}
-		
-		// Compare commits
-		if localHash != "" && remoteHash != "" && localHash == remoteHash {
-			return shelleyUpdateMsg{
-				output:  fmt.Sprintf("✅ shelley-cli is already up to date!\n\nLocal commit:  %s\nRemote commit: %s", localHash[:min(8, len(localHash))], remoteHash[:min(8, len(remoteHash))]),
-				success: true,
-			}
-		}
-		
-		if localHash != "" && remoteHash != "" {
-			result += fmt.Sprintf("Updating shelley-cli...\nLocal:  %s\nRemote: %s\n\n", localHash[:min(8, len(localHash))], remoteHash[:min(8, len(remoteHash))])
-		} else {
-			result += "Updating shelley-cli...\n\n"
+		// Helper to run commands as user
+		userExec := func(cmd string) (string, error) {
+			c := exec.Command("incus", "exec", containerName, "--", "su", "-", containerUser, "-c", cmd)
+			out, err := c.CombinedOutput()
+			return string(out), err
 		}
 
-		// Step 2: Stop running processes and kill ALL shelley screen sessions
-		killScript := `
-pkill -f "shelley serve" 2>/dev/null || true
-for session in $(screen -ls | grep shelley | awk '{print $1}'); do
-    screen -S "$session" -X quit 2>/dev/null || true
-done
-sudo systemctl stop igor 2>/dev/null || true
-echo "Stopped running shelley processes"
-sleep 2
-`
-		killCmd := exec.Command("incus", "exec", containerName, "--", "su", "-", containerUser, "-c", killScript)
-		killCmd.Run()
-		time.Sleep(2 * time.Second)
+		// Step 1: Check current versions
+		result += "Checking current versions...\n"
+		
+		opencodeVersion, _ := userExec("~/.opencode/bin/opencode --version 2>/dev/null || echo 'not installed'")
+		nanocodeVersion, _ := userExec("~/.bun/bin/nanocode --version 2>/dev/null || echo 'not installed'")
+		
+		result += fmt.Sprintf("Current opencode: %s", strings.TrimSpace(opencodeVersion))
+		result += fmt.Sprintf("Current nanocode: %s\n", strings.TrimSpace(nanocodeVersion))
 
-		// Step 3: Clone and build shelley-cli
-		buildScript := `
+		// Step 2: Update opencode
+		result += "\nUpdating opencode...\n"
+		opencodeUpdateScript := `
 set -e
-export PATH=$PATH:/usr/local/go/bin
-cd ` + userHome + `
-rm -rf shelley-cli
-git clone https://github.com/davidcjones79/shelley-cli.git
-cd shelley-cli
-make
-echo "Build complete"
+export PATH=$PATH:$HOME/.local/bin:$HOME/.bun/bin:$HOME/.opencode/bin
+curl -fsSL https://opencode.ai/install | bash
+~/.opencode/bin/opencode --version
 `
-		buildCmd := exec.Command("incus", "exec", containerName, "--", "sh", "-c", buildScript)
-		buildOutput, buildErr := buildCmd.CombinedOutput()
-		result += string(buildOutput)
-		
-		if buildErr != nil {
-			result += fmt.Sprintf("\n\n❌ Build failed: %v", buildErr)
-			return shelleyUpdateMsg{output: result, success: false}
+		opencodeOut, opencodeErr := userExec(opencodeUpdateScript)
+		result += opencodeOut
+		if opencodeErr != nil {
+			result += fmt.Sprintf("Warning: opencode update had issues: %v\n", opencodeErr)
+		} else {
+			result += "✅ opencode updated\n"
 		}
 
-		// Step 4: Install binary (as root)
-		installScript := `
-rm -f ` + userHome + `/go/bin/shelley
-cp ` + userHome + `/shelley-cli/bin/shelley ` + userHome + `/go/bin/
-chown ` + containerUser + `:` + containerUser + ` ` + userHome + `/go/bin/shelley
-echo "Binary installed"
+		// Step 3: Update nanocode
+		result += "\nUpdating nanocode...\n"
+		nanocodeUpdateScript := `
+set -e
+export PATH=$PATH:$HOME/.bun/bin:$HOME/.local/bin
+bun i -g nanocode@latest
+~/.bun/bin/nanocode --version
 `
-		installCmd := exec.Command("incus", "exec", containerName, "--", "sh", "-c", installScript)
-		installOutput, installErr := installCmd.CombinedOutput()
-		result += string(installOutput)
-		
-		if installErr != nil {
-			result += fmt.Sprintf("\n\n❌ Install failed: %v", installErr)
-			return shelleyUpdateMsg{output: result, success: false}
+		nanocodeOut, nanocodeErr := userExec(nanocodeUpdateScript)
+		result += nanocodeOut
+		if nanocodeErr != nil {
+			result += fmt.Sprintf("Warning: nanocode update had issues: %v\n", nanocodeErr)
+		} else {
+			result += "✅ nanocode updated\n"
 		}
 
-		// Step 5: Update igor.service
-		igorService := fmt.Sprintf(`[Unit]
-Description=Igor - Shelley File Transfer Assistant
-After=network.target
-
-[Service]
-Type=exec
-User=%s
-Group=%s
-WorkingDirectory=%s
-ExecStart=%s/go/bin/shelley igor -port 8099
-Restart=on-failure
-RestartSec=5
-Environment=HOME=%s
-Environment=USER=%s
-Environment=PATH=/usr/local/bin:/usr/bin:/bin:%s/go/bin
-
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=igor
-
-[Install]
-WantedBy=multi-user.target
-`, containerUser, containerUser, userHome, userHome, userHome, containerUser, userHome)
-
-		// Write service file via temp file
-		tmpService, _ := os.CreateTemp("", "igor.service")
-		tmpService.WriteString(igorService)
-		tmpService.Close()
-		exec.Command("incus", "file", "push", tmpService.Name(), containerName+"/etc/systemd/system/igor.service").Run()
-		os.Remove(tmpService.Name())
+		// Final summary
+		result += "\n"
+		newOpencodeVersion, _ := userExec("~/.opencode/bin/opencode --version 2>/dev/null || echo 'not installed'")
+		newNanocodeVersion, _ := userExec("~/.bun/bin/nanocode --version 2>/dev/null || echo 'not installed'")
 		
-		// Reload and start igor
-		exec.Command("incus", "exec", containerName, "--", "systemctl", "daemon-reload").Run()
-		exec.Command("incus", "exec", containerName, "--", "systemctl", "enable", "--now", "igor").Run()
-		result += "Igor service updated\n"
+		result += fmt.Sprintf("New opencode version: %s", strings.TrimSpace(newOpencodeVersion))
+		result += fmt.Sprintf("New nanocode version: %s\n", strings.TrimSpace(newNanocodeVersion))
 
-		// Step 6: Restart shelley serve in screen
-		// First, ensure no stale screen sessions exist
-		cleanupScript := `
-for session in $(screen -ls | grep shelley | awk '{print $1}'); do
-    screen -S "$session" -X quit 2>/dev/null || true
-done
-sleep 1
-`
-		cleanupCmd := exec.Command("incus", "exec", containerName, "--", "su", "-", containerUser, "-c", cleanupScript)
-		cleanupCmd.Run()
+		if opencodeErr != nil || nanocodeErr != nil {
+			result += "\n⚠️ Update completed with some warnings"
+			return toolsUpdateMsg{output: result, success: false}
+		}
 
-		// Now start fresh screen session
-		restartScript := `
-export PATH=$PATH:/usr/local/go/bin:` + userHome + `/go/bin
-cd ` + userHome + `
-screen -dmS shelley bash -c '` + userHome + `/shelley-launcher.sh; exec bash'
-sleep 3
-echo "Screen sessions:"
-screen -ls | grep -E "shelley|Socket"
-`
-		restartCmd := exec.Command("incus", "exec", containerName, "--", "su", "-", containerUser, "-c", restartScript)
-		restartOutput, _ := restartCmd.CombinedOutput()
-		result += string(restartOutput)
-		result += "\n\n✅ shelley-cli updated successfully!"
-
-		return shelleyUpdateMsg{output: result, success: true}
+		result += "\n✅ All tools updated successfully!"
+		return toolsUpdateMsg{output: result, success: true}
 	}
 }
 
@@ -2367,13 +2170,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.logContent = string(msg)
 		return m, nil
 
-	case shelleyUpdateMsg:
+	case toolsUpdateMsg:
 		m.updateOutput = msg.output
 		m.updateSuccess = msg.success
 		if msg.success {
-			m.status = "shelley-cli updated successfully"
+			m.status = "opencode/nanocode updated successfully"
 		} else {
-			m.status = "shelley-cli update failed"
+			m.status = "opencode/nanocode update failed"
 		}
 		return m, clearStatusAfterDelay()
 
@@ -2450,16 +2253,12 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleListKeys(key)
 	case stateContainerDetail:
 		return m.handleDetailKeys(key)
-	case stateCreateDomain, stateCreateDNSToken, stateCreateAppPort, stateCreateSSHKey, stateCreateAuthUser, stateCreateAuthPass, stateCreateAPIKey, stateCreateBaseURL, stateEditAppPort, stateEditAuthUser, stateEditAuthPass, stateImportContainer, stateImportAuthUser, stateImportAuthPass, stateImportAPIKey, stateImportBaseURL:
+	case stateCreateDomain, stateCreateDNSToken, stateCreateAppPort, stateCreateSSHKey, stateCreateAuthUser, stateCreateAuthPass, stateEditAppPort, stateEditAuthUser, stateEditAuthPass, stateImportContainer, stateImportAuthUser, stateImportAuthPass:
 		return m.handleInputKeys(key)
 	case stateCreateDNSProvider:
 		return m.handleDNSProviderKeys(key)
 	case stateCreateCFProxy:
 		return m.handleCFProxyKeys(key)
-	case stateCreateProviderSelect:
-		return m.handleProviderSelectKeys(key)
-	case stateImportProviderSelect:
-		return m.handleImportProviderSelectKeys(key)
 	case stateCreateImage:
 		return m.handleImageSelectKeys(key)
 	case stateImportImage:
@@ -2512,7 +2311,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.state = stateList
 			return m, m.refreshContainers()
 		}
-	case stateUpdateShelley:
+	case stateUpdateTools:
 		// Esc returns to container detail
 		if key == "q" || key == "esc" {
 			m.state = stateContainerDetail
@@ -2614,7 +2413,7 @@ func (m model) handleDetailKeys(key string) (tea.Model, tea.Cmd) {
 		m.textInput.SetValue(fmt.Sprintf("%d", c.AppPort))
 		m.textInput.Focus()
 	case "a":
-		// Edit Shelley auth credentials
+		// Edit basic auth credentials
 		m.state = stateEditAuthUser
 		m.textInput.Placeholder = "username"
 		// Get current username from DB
@@ -2633,18 +2432,18 @@ func (m model) handleDetailKeys(key string) (tea.Model, tea.Cmd) {
 		m.state = stateSnapshots
 		return m, nil
 	case "u":
-		// Update shelley-cli on container
+		// Update opencode/nanocode on container
 		if c.Status != "running" {
-			m.status = "Container must be running to update shelley-cli"
+			m.status = "Container must be running to update tools"
 			return m, clearStatusAfterDelay()
 		}
-		m.status = "Updating shelley-cli on " + c.Name + "..."
-		m.state = stateUpdateShelley
-		m.updateOutput = "Updating shelley-cli...\n"
+		m.status = "Updating opencode/nanocode on " + c.Name + "..."
+		m.state = stateUpdateTools
+		m.updateOutput = "Updating opencode/nanocode...\n"
 		m.updateSuccess = false
 		// Determine container user from image (we'll need to get this from DB or assume ubuntu for now)
 		containerUser := "ubuntu" // Default assumption
-		return m, updateShelleyCmd(c.Name, containerUser)
+		return m, updateToolsCmd(c.Name, containerUser)
 	case "q", "esc":
 		m.state = stateList
 		m.editingContainer = nil
@@ -2710,7 +2509,7 @@ func (m model) handleInputKeys(key string) (tea.Model, tea.Cmd) {
 
 	case stateCreateAuthUser:
 		if val == "" {
-			m.status = "Username required for Shelley authentication"
+			m.status = "Username required for basic authentication"
 			return m, clearStatusAfterDelay()
 		}
 		m.newAuthUser = val
@@ -2727,30 +2526,12 @@ func (m model) handleInputKeys(key string) (tea.Model, tea.Cmd) {
 		}
 		m.newAuthPass = val
 		m.textInput.EchoMode = textinput.EchoNormal
-		// Go to provider selection
-		m.state = stateCreateProviderSelect
-		m.newProviderIndex = 0 // Default to first provider
-		m.textInput.Reset()
-
-	case stateCreateAPIKey:
-		if val == "" {
-			m.status = "API key is required"
-			return m, clearStatusAfterDelay()
-		}
-		m.newAPIKey = val
-		// Go to optional base URL
-		m.state = stateCreateBaseURL
-		provider := availableProviders[m.newProviderIndex]
-		m.textInput.Placeholder = fmt.Sprintf("%s (optional, press Enter to skip)", provider.BaseURLEnvVar)
-		m.textInput.Reset()
-
-	case stateCreateBaseURL:
-		m.newBaseURL = val // Can be empty
+		// Start container creation directly
 		m.createOutput = "Starting container creation and bootstrap...\n"
 		m.state = stateCreating
 		m.textInput.Reset()
 		// Start async creation
-		return m, createContainerAsync(m.db, m.newDomain, m.newImage, m.newAppPort, m.newSSHKey, m.newDNSProvider, m.newDNSToken, m.newCFProxy, m.newAuthUser, m.newAuthPass, m.newProviderIndex, m.newAPIKey, m.newBaseURL)
+		return m, createContainerAsync(m.db, m.newDomain, m.newImage, m.newAppPort, m.newSSHKey, m.newDNSProvider, m.newDNSToken, m.newCFProxy, m.newAuthUser, m.newAuthPass)
 
 	case stateEditAppPort:
 		port := DefaultAppPort
@@ -2790,7 +2571,7 @@ func (m model) handleInputKeys(key string) (tea.Model, tea.Cmd) {
 			if err != nil {
 				m.status = "Update failed: " + err.Error()
 			} else {
-				m.status = "Updated Shelley auth credentials"
+				m.status = "Updated basic auth credentials"
 			}
 		}
 		m.state = stateContainerDetail
@@ -2835,28 +2616,10 @@ func (m model) handleInputKeys(key string) (tea.Model, tea.Cmd) {
 		}
 		m.newAuthPass = val
 		m.textInput.EchoMode = textinput.EchoNormal
-		// Go to provider selection for import
-		m.state = stateImportProviderSelect
-		m.newProviderIndex = 0
-		m.textInput.Reset()
-
-	case stateImportAPIKey:
-		if val == "" {
-			m.status = "API key is required"
-			return m, clearStatusAfterDelay()
-		}
-		m.newAPIKey = val
-		// Go to optional base URL
-		m.state = stateImportBaseURL
-		provider := availableProviders[m.newProviderIndex]
-		m.textInput.Placeholder = fmt.Sprintf("%s (optional, press Enter to skip)", provider.BaseURLEnvVar)
-		m.textInput.Reset()
-
-	case stateImportBaseURL:
-		m.newBaseURL = val // Can be empty
+		// Import container directly (no more LLM provider selection)
 		if m.cursor < len(m.untrackedContainers) {
 			containerName := m.untrackedContainers[m.cursor]
-			err := importContainer(m.db, containerName, m.newDomain, m.newImage, DefaultAppPort, m.newAuthUser, m.newAuthPass, m.newProviderIndex, m.newAPIKey, m.newBaseURL, m.newSSHKey)
+			err := importContainer(m.db, containerName, m.newDomain, m.newImage, DefaultAppPort, m.newAuthUser, m.newAuthPass, m.newSSHKey)
 			if err != nil {
 				m.status = "Import failed: " + err.Error()
 			} else {
@@ -2976,50 +2739,6 @@ func (m model) handleImportImageSelectKeys(key string) (tea.Model, tea.Cmd) {
 		m.state = stateImportAuthUser
 		m.textInput.Placeholder = "admin"
 		m.textInput.SetValue("admin")
-		m.textInput.Focus()
-	case "esc", "q":
-		m.state = stateUntracked
-	}
-	return m, nil
-}
-
-func (m model) handleProviderSelectKeys(key string) (tea.Model, tea.Cmd) {
-	switch key {
-	case "up", "k":
-		if m.newProviderIndex > 0 {
-			m.newProviderIndex--
-		}
-	case "down", "j":
-		if m.newProviderIndex < len(availableProviders)-1 {
-			m.newProviderIndex++
-		}
-	case "enter":
-		// Proceed to API key input
-		provider := availableProviders[m.newProviderIndex]
-		m.state = stateCreateAPIKey
-		m.textInput.Placeholder = provider.APIKeyEnvVar + " value"
-		m.textInput.Focus()
-	case "esc", "q":
-		m.state = stateList
-	}
-	return m, nil
-}
-
-func (m model) handleImportProviderSelectKeys(key string) (tea.Model, tea.Cmd) {
-	switch key {
-	case "up", "k":
-		if m.newProviderIndex > 0 {
-			m.newProviderIndex--
-		}
-	case "down", "j":
-		if m.newProviderIndex < len(availableProviders)-1 {
-			m.newProviderIndex++
-		}
-	case "enter":
-		// Proceed to API key input
-		provider := availableProviders[m.newProviderIndex]
-		m.state = stateImportAPIKey
-		m.textInput.Placeholder = provider.APIKeyEnvVar + " value"
 		m.textInput.Focus()
 	case "esc", "q":
 		m.state = stateUntracked
@@ -3225,13 +2944,13 @@ func (m model) View() string {
 		// Show current DNS status
 		dnsStatus := "⚠ DNS not configured (A records needed)"
 		mainOK := checkDNSResolvesToHost(m.newDomain)
-		shelleyOK := checkDNSResolvesToHost("shelley." + m.newDomain)
-		if mainOK && shelleyOK {
+		codeOK := checkDNSResolvesToHost("code." + m.newDomain)
+		if mainOK && codeOK {
 			dnsStatus = "✅ DNS already configured correctly"
 		} else if mainOK {
-			dnsStatus = "⚠ Main domain OK, shelley." + m.newDomain + " not configured"
-		} else if shelleyOK {
-			dnsStatus = "⚠ shelley subdomain OK, main domain not configured"
+			dnsStatus = "⚠ Main domain OK, code." + m.newDomain + " not configured"
+		} else if codeOK {
+			dnsStatus = "⚠ code subdomain OK, main domain not configured"
 		}
 		return fmt.Sprintf("📦 CREATE: %s\n\n%s\n\nAuto-create DNS records?\n\n[1] No - I'll configure DNS manually\n[2] Cloudflare\n[3] deSEC\n\n[Esc] Cancel", m.newDomain, dnsStatus)
 
@@ -3260,19 +2979,6 @@ func (m model) View() string {
 	case stateCreateImage:
 		return m.viewImageSelect("CREATE: "+m.newDomain)
 
-	case stateCreateProviderSelect:
-		return m.viewProviderSelect("CREATE: "+m.newDomain)
-
-	case stateCreateAPIKey:
-		provider := availableProviders[m.newProviderIndex]
-		return fmt.Sprintf("🤖 CREATE: %s\n\nSelected provider: %s\n\nEnter %s:\n\n%s\n\n[Enter] Continue  [Esc] Cancel",
-			m.newDomain, provider.Name, provider.APIKeyEnvVar, m.textInput.View())
-
-	case stateCreateBaseURL:
-		provider := availableProviders[m.newProviderIndex]
-		return fmt.Sprintf("🤖 CREATE: %s\n\nSelected provider: %s\n\nEnter %s (optional, press Enter to skip):\n\n%s\n\n[Enter] Create Container  [Esc] Cancel",
-			m.newDomain, provider.Name, provider.BaseURLEnvVar, m.textInput.View())
-
 	case stateEditAppPort:
 		return fmt.Sprintf("✏️  EDIT APP PORT\n\nNew port:\n\n%s\n\n[Enter] Save  [Esc] Cancel", m.textInput.View())
 
@@ -3281,16 +2987,16 @@ func (m model) View() string {
 		if m.editingContainer != nil {
 			containerName = m.editingContainer.Name
 		}
-		return fmt.Sprintf("🔐 EDIT SHELLEY AUTH: %s\n\nNew username:\n\n%s\n\n[Enter] Continue  [Esc] Cancel", containerName, m.textInput.View())
+		return fmt.Sprintf("🔐 EDIT BASIC AUTH: %s\n\nNew username:\n\n%s\n\n[Enter] Continue  [Esc] Cancel", containerName, m.textInput.View())
 
 	case stateEditAuthPass:
 		containerName := ""
 		if m.editingContainer != nil {
 			containerName = m.editingContainer.Name
 		}
-		return fmt.Sprintf("🔐 EDIT SHELLEY AUTH: %s\n\nNew password (min 8 chars):\n\n%s\n\n[Enter] Save  [Esc] Cancel", containerName, m.textInput.View())
+		return fmt.Sprintf("🔐 EDIT BASIC AUTH: %s\n\nNew password (min 8 chars):\n\n%s\n\n[Enter] Save  [Esc] Cancel", containerName, m.textInput.View())
 
-	case stateUpdateShelley:
+	case stateUpdateTools:
 		containerName := ""
 		if m.editingContainer != nil {
 			containerName = m.editingContainer.Name
@@ -3335,28 +3041,6 @@ func (m model) View() string {
 		if m.cursor < len(m.untrackedContainers) {
 			return fmt.Sprintf("🔐 IMPORT: %s\n\nPassword (min 8 chars):\n\n%s\n\n[Enter] Continue  [Esc] Cancel",
 				m.untrackedContainers[m.cursor], m.textInput.View())
-		}
-		return "No container selected"
-
-	case stateImportProviderSelect:
-		if m.cursor < len(m.untrackedContainers) {
-			return m.viewProviderSelect("IMPORT: " + m.untrackedContainers[m.cursor])
-		}
-		return "No container selected"
-
-	case stateImportAPIKey:
-		if m.cursor < len(m.untrackedContainers) {
-			provider := availableProviders[m.newProviderIndex]
-			return fmt.Sprintf("🤖 IMPORT: %s\n\nSelected provider: %s\n\nEnter %s:\n\n%s\n\n[Enter] Continue  [Esc] Cancel",
-				m.untrackedContainers[m.cursor], provider.Name, provider.APIKeyEnvVar, m.textInput.View())
-		}
-		return "No container selected"
-
-	case stateImportBaseURL:
-		if m.cursor < len(m.untrackedContainers) {
-			provider := availableProviders[m.newProviderIndex]
-			return fmt.Sprintf("🤖 IMPORT: %s\n\nSelected provider: %s\n\nEnter %s (optional, press Enter to skip):\n\n%s\n\n[Enter] Import Container  [Esc] Cancel",
-				m.untrackedContainers[m.cursor], provider.Name, provider.BaseURLEnvVar, m.textInput.View())
 		}
 		return "No container selected"
 
@@ -3430,24 +3114,6 @@ func (m model) viewImageSelect(title string) string {
 	s += "  [2] Debian (latest)\n"
 	s += "\n───────────────────────────────────────────────────────────────────────────────\n"
 	s += "[1/2] Select  [Esc] Cancel\n"
-	return s
-}
-
-func (m model) viewProviderSelect(title string) string {
-	s := fmt.Sprintf("🤖 %s\n", title)
-	s += "═══════════════════════════════════════════════════════════════════════════════\n\n"
-	s += "Select LLM provider for shelley-cli:\n\n"
-
-	for i, provider := range availableProviders {
-		cursor := "  "
-		if i == m.newProviderIndex {
-			cursor = "▶ "
-		}
-		s += fmt.Sprintf("%s[%d] %s\n", cursor, i+1, provider.Name)
-	}
-
-	s += "\n───────────────────────────────────────────────────────────────────────────────\n"
-	s += "[↑/↓] Navigate  [Enter] Select  [Esc] Cancel\n"
 	return s
 }
 
@@ -3591,7 +3257,7 @@ func (m model) viewContainerDetail() string {
 	s += fmt.Sprintf("  Created:      %s\n", c.CreatedAt.Format("2006-01-02 15:04:05"))
 	s += "\n"
 	s += fmt.Sprintf("  🌐 App URL:     https://%s\n", c.Domain)
-	s += fmt.Sprintf("  🤖 Shelley URL: https://shelley.%s\n", c.Domain)
+	s += fmt.Sprintf("  🤖 Code UI: https://code.%s\n", c.Domain)
 	hostIP := getHostPublicIP()
 	if hostIP == "" {
 		hostIP = "<host>"
@@ -3600,7 +3266,7 @@ func (m model) viewContainerDetail() string {
 	s += "\n"
 	s += "───────────────────────────────────────────────────────────────────────────────\n"
 	s += "[s] Start/Stop  [r] Restart  [p] Change Port  [a] Change Auth\n"
-	s += "[S] Snapshots   [u] Update shelley-cli  [Esc] Back\n"
+	s += "[S] Snapshots   [u] Update opencode/nanocode  [Esc] Back\n"
 
 	if m.status != "" {
 		s += "\n📋 " + m.status

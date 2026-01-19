@@ -22,8 +22,7 @@ const (
 	CaddyConfDir = "/etc/caddy/conf.d"
 	SSHPiperRoot = "/var/lib/sshpiper"
 	DBPath       = "/var/lib/shelley/containers.db"
-	ShelleyPort  = 9999
-	UploadPort   = 8099
+	CodeUIPort   = 9999 // opencode/nanocode web UI port
 )
 
 type lifecycleEvent struct {
@@ -225,8 +224,7 @@ func updateCaddyRoutes(name, domain, ip string, appPort int, authUser, authHash 
 
 	// Delete existing routes
 	deleteCaddyRoute(client, caddyAPI, name+"-app")
-	deleteCaddyRoute(client, caddyAPI, name+"-shelley")
-	deleteCaddyRoute(client, caddyAPI, name+"-upload")
+	deleteCaddyRoute(client, caddyAPI, name+"-code")
 
 	// Add app route
 	appRoute := map[string]interface{}{
@@ -239,10 +237,10 @@ func updateCaddyRoutes(name, domain, ip string, appPort int, authUser, authHash 
 	}
 	addCaddyRoute(client, caddyAPI, appRoute)
 
-	// Build upload route handlers
-	var uploadHandlers []map[string]interface{}
+	// Build code UI route handlers (for opencode/nanocode web UI)
+	var codeHandlers []map[string]interface{}
 	if authUser != "" && authHash != "" {
-		uploadHandlers = append(uploadHandlers, map[string]interface{}{
+		codeHandlers = append(codeHandlers, map[string]interface{}{
 			"handler": "authentication",
 			"providers": map[string]interface{}{
 				"http_basic": map[string]interface{}{
@@ -250,59 +248,23 @@ func updateCaddyRoutes(name, domain, ip string, appPort int, authUser, authHash 
 						"username": authUser,
 						"password": authHash,
 					}},
-					"realm": "Upload",
+					"realm": "Code",
 				},
 			},
 		})
 	}
-	uploadHandlers = append(uploadHandlers, map[string]interface{}{
-		"handler": "rewrite",
-		"uri":     "{http.request.uri.path.strip_prefix(/upload)}",
-	})
-	uploadHandlers = append(uploadHandlers, map[string]interface{}{
+	codeHandlers = append(codeHandlers, map[string]interface{}{
 		"handler":   "reverse_proxy",
-		"upstreams": []map[string]string{{"dial": fmt.Sprintf("%s:%d", ip, UploadPort)}},
+		"upstreams": []map[string]string{{"dial": fmt.Sprintf("%s:%d", ip, CodeUIPort)}},
 	})
 
-	// Add upload route FIRST (more specific - has path match)
-	uploadRoute := map[string]interface{}{
-		"@id": name + "-upload",
-		"match": []map[string]interface{}{{
-			"host": []string{"shelley." + domain},
-			"path": []string{"/upload", "/upload/*"},
-		}},
-		"handle": uploadHandlers,
+	// Add code UI route
+	codeRoute := map[string]interface{}{
+		"@id":   name + "-code",
+		"match": []map[string]interface{}{{"host": []string{"code." + domain}}},
+		"handle": codeHandlers,
 	}
-	addCaddyRoute(client, caddyAPI, uploadRoute)
-
-	// Build shelley route handlers
-	var shelleyHandlers []map[string]interface{}
-	if authUser != "" && authHash != "" {
-		shelleyHandlers = append(shelleyHandlers, map[string]interface{}{
-			"handler": "authentication",
-			"providers": map[string]interface{}{
-				"http_basic": map[string]interface{}{
-					"accounts": []map[string]string{{
-						"username": authUser,
-						"password": authHash,
-					}},
-					"realm": "Shelley",
-				},
-			},
-		})
-	}
-	shelleyHandlers = append(shelleyHandlers, map[string]interface{}{
-		"handler":   "reverse_proxy",
-		"upstreams": []map[string]string{{"dial": fmt.Sprintf("%s:%d", ip, ShelleyPort)}},
-	})
-
-	// Add shelley route AFTER upload route (less specific - catches all other paths)
-	shelleyRoute := map[string]interface{}{
-		"@id":   name + "-shelley",
-		"match": []map[string]interface{}{{"host": []string{"shelley." + domain}}},
-		"handle": shelleyHandlers,
-	}
-	addCaddyRoute(client, caddyAPI, shelleyRoute)
+	addCaddyRoute(client, caddyAPI, codeRoute)
 }
 
 func addCaddyRoute(client *http.Client, caddyAPI string, route map[string]interface{}) {
@@ -330,8 +292,7 @@ func removeCaddyRoutes(name string) {
 	client := &http.Client{Timeout: 10 * time.Second}
 	caddyAPI := "http://localhost:2019"
 	deleteCaddyRoute(client, caddyAPI, name+"-app")
-	deleteCaddyRoute(client, caddyAPI, name+"-shelley")
-	deleteCaddyRoute(client, caddyAPI, name+"-upload")
+	deleteCaddyRoute(client, caddyAPI, name+"-code")
 }
 
 func getContainerStatus(name string) (status, ip string) {
