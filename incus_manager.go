@@ -2100,8 +2100,8 @@ func startTool(tool string) error {
 	var cmd *exec.Cmd
 	proj := filepath.Join(state.homeDir, ProjectsDir)
 	switch tool {
-	case "opencode": cmd = exec.Command("bash", "-c", fmt.Sprintf("cd %s && opencode serve --port %d --hostname 0.0.0.0", proj, WebUIPort))
-	case "nanocode": cmd = exec.Command("bash", "-c", fmt.Sprintf("cd %s && nanocode serve --port %d --hostname 0.0.0.0", proj, WebUIPort))
+	case "opencode": cmd = exec.Command("bash", "-c", fmt.Sprintf("cd %s && %s/.opencode/bin/opencode serve --port %d --hostname 0.0.0.0", proj, state.homeDir, WebUIPort))
+	case "nanocode": cmd = exec.Command("bash", "-c", fmt.Sprintf("cd %s && %s/.bun/bin/nanocode serve --port %d --hostname 0.0.0.0", proj, state.homeDir, WebUIPort))
 	case "openhands":
 		uid := os.Getuid()
 		cmd = exec.Command("bash", "-c", fmt.Sprintf("docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v %s/.openhands:/.openhands -p %d:3000 --add-host host.docker.internal:host-gateway -e SANDBOX_VOLUMES=%s:/workspace:rw -e SANDBOX_USER_ID=%d --name openhands-app docker.all-hands.dev/all-hands-ai/openhands:latest", state.homeDir, WebUIPort, proj, uid))
@@ -2146,22 +2146,36 @@ func handleUpdate(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream"); w.Header().Set("Cache-Control", "no-cache")
 	flusher, _ := w.(http.Flusher)
 	send := func(m string) { fmt.Fprintf(w, "data: %s\n\n", m); flusher.Flush() }
-	send("Stopping running processes...")
+	send("🔄 Stopping running processes...")
 	state.mu.Lock()
 	if state.activeTool != "" { stopTool(state.activeTool); state.activeTool = ""; state.activeProcess = nil; state.activePID = 0 }
 	state.mu.Unlock()
 	exec.Command("pkill", "-f", "opencode serve").Run(); exec.Command("pkill", "-f", "nanocode serve").Run()
 	exec.Command("docker", "stop", "openhands-app").Run(); exec.Command("docker", "rm", "-f", "openhands-app").Run()
 	time.Sleep(time.Second)
-	send("\n📦 Updating opencode...")
-	out, _ := exec.Command("bash", "-c", "curl -fsSL https://opencode.ai/install | bash 2>&1").CombinedOutput(); send(string(out)); send("✅ opencode updated")
-	send("\n📦 Updating nanocode...")
-	out, _ = exec.Command("bash", "-c", "export PATH=$PATH:$HOME/.bun/bin && bun i -g nanocode@latest 2>&1").CombinedOutput(); send(string(out)); send("✅ nanocode updated")
-	send("\n📦 Updating openhands...")
-	out, _ = exec.Command("bash", "-c", "$HOME/.local/bin/uv tool uninstall openhands 2>/dev/null; $HOME/.local/bin/uv tool install --python 3.12 openhands 2>&1").CombinedOutput(); send(string(out)); send("✅ openhands updated")
-	send("\n🐳 Pulling OpenHands Docker image..."); send("(This may take a few minutes...)")
-	out, _ = exec.Command("docker", "pull", "docker.all-hands.dev/all-hands-ai/openhands:latest").CombinedOutput(); send(string(out)); send("✅ Docker image updated")
-	send("\n✅ All updates complete!"); send("DONE")
+	send("✅ Processes stopped\n")
+	send("\n📦 [1/4] Updating opencode...")
+	send("Running: curl -fsSL https://opencode.ai/install | bash")
+	out, _ := exec.Command("bash", "-c", "curl -fsSL https://opencode.ai/install 2>/dev/null | bash 2>&1 | tail -5").CombinedOutput()
+	if len(strings.TrimSpace(string(out))) > 0 { send(string(out)) }
+	send("✅ opencode updated\n")
+	send("\n📦 [2/4] Updating nanocode...")
+	send("Running: bun i -g nanocode@latest")
+	out, _ = exec.Command("bash", "-c", "export PATH=$PATH:$HOME/.bun/bin && bun i -g nanocode@latest 2>&1 | grep -v '^$'").CombinedOutput()
+	if len(strings.TrimSpace(string(out))) > 0 { send(string(out)) }
+	send("✅ nanocode updated\n")
+	send("\n📦 [3/4] Updating openhands CLI...")
+	send("Running: uv tool install --python 3.12 openhands")
+	out, _ = exec.Command("bash", "-c", "$HOME/.local/bin/uv tool uninstall openhands 2>/dev/null; $HOME/.local/bin/uv tool install --python 3.12 openhands 2>&1 | grep -v '^$'").CombinedOutput()
+	if len(strings.TrimSpace(string(out))) > 0 { send(string(out)) }
+	send("✅ openhands CLI updated\n")
+	send("\n🐳 [4/4] Pulling OpenHands Docker image...")
+	send("Running: docker pull docker.all-hands.dev/all-hands-ai/openhands:latest")
+	send("(This may take a few minutes...)")
+	out, _ = exec.Command("bash", "-c", "docker pull docker.all-hands.dev/all-hands-ai/openhands:latest 2>&1 | grep -E '^(latest:|[a-f0-9]+:|Status:|Digest:)'").CombinedOutput()
+	if len(strings.TrimSpace(string(out))) > 0 { send(string(out)) }
+	send("✅ Docker image updated\n")
+	send("\n🎉 All updates complete!"); send("DONE")
 }
 
 func handleDNSCheck(w http.ResponseWriter, r *http.Request) {
