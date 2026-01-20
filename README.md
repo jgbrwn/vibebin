@@ -197,7 +197,7 @@ During container creation, the following is automatically installed:
 - **opencode** (open source AI coding agent)
 - **nanocode** (NanoGPT-powered AI coding agent)
 - **openhands** (full-featured AI coding agent via uv with Python 3.12)
-- **Project directories** (`~/projects/{opencode,nanocode,openhands}` for AI coding tools)
+- **Project directory** (`~/projects` for AI coding tool workspaces)
 - **Custom MOTD** (shows container info, URLs, and tool versions on SSH login)
 
 ## ⚠️ Required: SSHPiper Manual Setup (After First Run)
@@ -282,7 +282,7 @@ sudo incus_manager
 
 ## Using the AI Coding Tools
 
-After creating a container, SSH in and run any of the tools. Each tool has its own project directory pre-created at `~/projects/{opencode,nanocode,openhands}`.
+After creating a container, SSH in and run any of the tools. A project directory is pre-created at `~/projects` for your coding workspaces.
 
 ### Terminal Mode
 
@@ -290,13 +290,17 @@ After creating a container, SSH in and run any of the tools. Each tool has its o
 # SSH to your container
 ssh -p 2222 container-name@host.example.com
 
-# For opencode - cd to its project directory first
-cd ~/projects/opencode
+# cd to projects directory first
+cd ~/projects
+
+# Run opencode
 opencode
 
-# For nanocode - cd to its project directory first
-cd ~/projects/nanocode
+# Or run nanocode
 nanocode
+
+# Or run openhands CLI
+openhands
 ```
 
 All tools will prompt you to configure your LLM provider and API key on first run.
@@ -312,19 +316,19 @@ ssh -p 2222 container-name@host.example.com
 
 **opencode** (cd to project directory first):
 ```bash
-cd ~/projects/opencode
+cd ~/projects
 screen -S code
 opencode serve --port 9999 --hostname 0.0.0.0
 ```
 
 **nanocode** (cd to project directory first):
 ```bash
-cd ~/projects/nanocode
+cd ~/projects
 screen -S code
 nanocode serve --port 9999 --hostname 0.0.0.0
 ```
 
-**openhands** (uses Docker, mounts `~/projects/openhands` as workspace):
+**openhands** (uses Docker, mounts `~/projects` as workspace):
 ```bash
 screen -S code
 docker run -it --rm --pull=always \
@@ -332,7 +336,7 @@ docker run -it --rm --pull=always \
   -v ~/.openhands:/.openhands \
   -p 9999:3000 \
   --add-host host.docker.internal:host-gateway \
-  -e SANDBOX_VOLUMES=~/projects/openhands:/workspace:rw \
+  -e SANDBOX_VOLUMES=~/projects:/workspace:rw \
   -e SANDBOX_USER_ID=$(id -u) \
   --name openhands-app \
   docker.all-hands.dev/all-hands-ai/openhands:latest

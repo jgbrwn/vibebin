@@ -1904,10 +1904,10 @@ echo "Node.js $(node --version) installed successfully"
 	}
 
 	// STEP 10c: Create project directories for AI coding tools
-	sendProgress("Creating project directories...")
-	userExec("mkdir -p ~/projects/opencode ~/projects/nanocode ~/projects/openhands")
+	sendProgress("Creating project directory...")
+	userExec("mkdir -p ~/projects")
 	userExec("mkdir -p ~/.openhands")
-	sendProgress("✅ Project directories created")
+	sendProgress("✅ Project directory created")
 
 	// STEP 11: Configure custom MOTD
 	sendProgress("Configuring welcome message (MOTD)...")
@@ -1942,23 +1942,23 @@ echo "  AI Coding Agents:"
 echo "    Configure your LLM provider/API keys within each tool on first run."
 echo "    Note: Only one web UI can run on port 9999 at a time."
 echo ""
-echo "    Project directories: ~/projects/{opencode,nanocode,openhands}"
+echo "    Project directory: ~/projects"
 echo ""
-echo "    opencode (cd ~/projects/opencode first):"
+echo "    opencode (cd ~/projects first):"
 echo "      CLI:    opencode"
 echo "      Web UI: opencode serve --port 9999 --hostname 0.0.0.0"
 echo ""
-echo "    nanocode (cd ~/projects/nanocode first):"
+echo "    nanocode (cd ~/projects first):"
 echo "      CLI:    nanocode"
 echo "      Web UI: nanocode serve --port 9999 --hostname 0.0.0.0"
 echo ""
-echo "    openhands (uses Docker, mounts ~/projects/openhands):"
+echo "    openhands (uses Docker, mounts ~/projects as workspace):"
 echo "      docker run -it --rm --pull=always \\"
 echo "        -v /var/run/docker.sock:/var/run/docker.sock \\"
 echo "        -v ~/.openhands:/.openhands \\"
 echo "        -p 9999:3000 \\"
 echo "        --add-host host.docker.internal:host-gateway \\"
-echo "        -e SANDBOX_VOLUMES=~/projects/openhands:/workspace:rw \\"
+echo "        -e SANDBOX_VOLUMES=~/projects:/workspace:rw \\"
 echo "        -e SANDBOX_USER_ID=\$(id -u) \\"
 echo "        --name openhands-app \\"
 echo "        docker.all-hands.dev/all-hands-ai/openhands:latest"
