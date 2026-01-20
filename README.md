@@ -197,6 +197,7 @@ During container creation, the following is automatically installed:
 - **opencode** (open source AI coding agent)
 - **nanocode** (NanoGPT-powered AI coding agent)
 - **openhands** (full-featured AI coding agent via uv with Python 3.12)
+- **Project directories** (`~/projects/{opencode,nanocode,openhands}` for AI coding tools)
 - **Custom MOTD** (shows container info, URLs, and tool versions on SSH login)
 
 ## ⚠️ Required: SSHPiper Manual Setup (After First Run)
@@ -281,7 +282,7 @@ sudo incus_manager
 
 ## Using the AI Coding Tools
 
-After creating a container, SSH in and run any of the tools:
+After creating a container, SSH in and run any of the tools. Each tool has its own project directory pre-created at `~/projects/{opencode,nanocode,openhands}`.
 
 ### Terminal Mode
 
@@ -289,42 +290,52 @@ After creating a container, SSH in and run any of the tools:
 # SSH to your container
 ssh -p 2222 container-name@host.example.com
 
-# Run opencode
+# For opencode - cd to its project directory first
+cd ~/projects/opencode
 opencode
 
-# Or run nanocode
+# For nanocode - cd to its project directory first
+cd ~/projects/nanocode
 nanocode
-
-# Or run openhands (CLI mode)
-openhands
 ```
 
 All tools will prompt you to configure your LLM provider and API key on first run.
 
 ### Web UI Mode
 
-To access the AI coding agent via web browser, first navigate to your project directory:
+To access the AI coding agent via web browser:
 
 ```bash
 # SSH to your container
 ssh -p 2222 container-name@host.example.com
+```
 
-# Create or navigate to your project directory
-mkdir -p ~/myapp && cd ~/myapp
-
-# Start one of the web UIs (only one can run at a time on port 9999)
-
-# Option 1: opencode web UI
+**opencode** (cd to project directory first):
+```bash
+cd ~/projects/opencode
 screen -S code
 opencode serve --port 9999 --hostname 0.0.0.0
+```
 
-# Option 2: nanocode web UI
+**nanocode** (cd to project directory first):
+```bash
+cd ~/projects/nanocode
 screen -S code
 nanocode serve --port 9999 --hostname 0.0.0.0
+```
 
-# Option 3: openhands web UI
+**openhands** (uses Docker, mounts `~/projects/openhands` as workspace):
+```bash
 screen -S code
-openhands serve --mount-cwd --port 9999
+docker run -it --rm --pull=always \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v ~/.openhands:/.openhands \
+  -p 9999:3000 \
+  --add-host host.docker.internal:host-gateway \
+  -e SANDBOX_VOLUMES=~/projects/openhands:/workspace:rw \
+  -e SANDBOX_USER_ID=$(id -u) \
+  --name openhands-app \
+  docker.all-hands.dev/all-hands-ai/openhands:latest
 ```
 
 Then access via `https://code.yourdomain.com` (protected by Basic Auth credentials you set during container creation).
@@ -335,7 +346,7 @@ Press `Ctrl+A, D` to detach from screen. Reattach with `screen -x code`.
 
 ### Updating AI Tools
 
-From the container detail view in the TUI, press `u` to update opencode, nanocode, and openhands to their latest versions.
+From the container detail view in the TUI, press `u` to update opencode and nanocode to their latest versions.
 
 ## SSH Access
 

@@ -1903,6 +1903,12 @@ echo "Node.js $(node --version) installed successfully"
 		sendProgress("✅ openhands installed")
 	}
 
+	// STEP 10c: Create project directories for AI coding tools
+	sendProgress("Creating project directories...")
+	userExec("mkdir -p ~/projects/opencode ~/projects/nanocode ~/projects/openhands")
+	userExec("mkdir -p ~/.openhands")
+	sendProgress("✅ Project directories created")
+
 	// STEP 11: Configure custom MOTD
 	sendProgress("Configuring welcome message (MOTD)...")
 	motdScript := fmt.Sprintf(`#!/bin/bash
@@ -1929,27 +1935,40 @@ echo "    • Deno      $(${USER_HOME}/.deno/bin/deno --version 2>/dev/null | he
 echo "    • uv        $(${USER_HOME}/.local/bin/uv --version 2>/dev/null | awk '{print $2}' || echo 'not found')"
 echo "    • opencode  $(${USER_HOME}/.opencode/bin/opencode --version 2>/dev/null || echo 'not found')"
 echo "    • nanocode  $(${USER_HOME}/.bun/bin/nanocode --version 2>/dev/null || echo 'not found')"
-echo "    • openhands $(${USER_HOME}/.local/bin/openhands --version 2>/dev/null | head -1 | awk '{print $2}' || echo 'not found')"
 echo ""
 echo "  ─────────────────────────────────────────────────────────────────────────────"
 echo "  AI Coding Agents:"
 echo "    Configure your LLM provider/API keys within each tool on first run."
 echo "    Note: Only one web UI can run on port 9999 at a time."
 echo ""
-echo "    First, cd to your project directory (e.g., cd ~/myapp)"
+echo "    Project directories: ~/projects/{opencode,nanocode,openhands}"
 echo ""
-echo "    opencode:  opencode serve --port 9999 --hostname 0.0.0.0"
-echo "    nanocode:  nanocode serve --port 9999 --hostname 0.0.0.0"
-echo "    openhands: openhands serve --mount-cwd --port 9999"
+echo "    opencode (cd ~/projects/opencode first):"
+echo "      CLI:    opencode"
+echo "      Web UI: opencode serve --port 9999 --hostname 0.0.0.0"
 echo ""
-echo "    Then access via: https://code.%s"
+echo "    nanocode (cd ~/projects/nanocode first):"
+echo "      CLI:    nanocode"
+echo "      Web UI: nanocode serve --port 9999 --hostname 0.0.0.0"
+echo ""
+echo "    openhands (uses Docker, mounts ~/projects/openhands):"
+echo "      docker run -it --rm --pull=always \\"
+echo "        -v /var/run/docker.sock:/var/run/docker.sock \\"
+echo "        -v ~/.openhands:/.openhands \\"
+echo "        -p 9999:3000 \\"
+echo "        --add-host host.docker.internal:host-gateway \\"
+echo "        -e SANDBOX_VOLUMES=~/projects/openhands:/workspace:rw \\"
+echo "        -e SANDBOX_USER_ID=\$(id -u) \\"
+echo "        --name openhands-app \\"
+echo "        docker.all-hands.dev/all-hands-ai/openhands:latest"
+echo ""
+echo "    Then access web UI via: https://code.%s"
 echo ""
 echo "  ─────────────────────────────────────────────────────────────────────────────"
 echo "  Documentation: https://github.com/jgbrwn/shelley-lxc"
 echo "═══════════════════════════════════════════════════════════════════════════════"
 echo ""
 `, containerUser, containerName, domain, domain, domain)
-
 	tmpMotd, _ := os.CreateTemp("", "99-incus-manager")
 	tmpMotd.WriteString(motdScript)
 	tmpMotd.Close()
