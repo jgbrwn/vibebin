@@ -2293,7 +2293,7 @@ echo "    • Deno      $(${USER_HOME}/.deno/bin/deno --version 2>/dev/null | he
 echo "    • uv        $(${USER_HOME}/.local/bin/uv --version 2>/dev/null | awk '{print $2}' || echo 'not found')"
 echo "    • opencode  $(${USER_HOME}/.opencode/bin/opencode --version 2>/dev/null || echo 'not found')"
 echo "    • nanocode  $(${USER_HOME}/.bun/bin/nanocode --version 2>/dev/null || echo 'not found')"
-echo "    • openhands $(${USER_HOME}/.local/bin/uv tool list 2>/dev/null | grep '^openhands ' | awk '{print $2}' || echo 'not found')"
+echo "    • openhands $(timeout 2 ${USER_HOME}/.local/bin/openhands --version 2>/dev/null | awk '{print $NF}' || echo 'not found')"
 echo ""
 echo "  ─────────────────────────────────────────────────────────────────────────────"
 echo "  AI Coding Agents:"
@@ -2456,7 +2456,7 @@ func updateToolsCmd(containerName, containerUser string) tea.Cmd {
 			return v
 		}())
 		currentOpenhands := strings.TrimSpace(func() string {
-			v, _ := userExec("~/.local/bin/uv tool list 2>/dev/null | grep '^openhands ' | awk '{print $2}' || echo 'not installed'")
+			v, _ := userExec("timeout 5 ~/.local/bin/openhands --version 2>/dev/null | awk '{print $NF}' || echo 'not installed'")
 			return v
 		}())
 		
@@ -2575,7 +2575,7 @@ func updateToolsCmd(containerName, containerUser string) tea.Cmd {
 		// Step 6: Update openhands if needed
 		if openhandsNeedsUpdate {
 			result += fmt.Sprintf("\nUpdating openhands (%s -> %s)...\n", currentOpenhands, latestOpenhands)
-			openhandsOut, err := userExec("~/.local/bin/uv tool uninstall openhands 2>/dev/null; ~/.local/bin/uv tool install --python 3.12 openhands && ~/.local/bin/uv tool list | grep '^openhands '")
+			openhandsOut, err := userExec("~/.local/bin/uv tool uninstall openhands 2>/dev/null; ~/.local/bin/uv tool install --python 3.12 openhands && timeout 5 ~/.local/bin/openhands --version")
 			result += openhandsOut
 			openhandsErr = err
 			if err != nil {
@@ -2585,7 +2585,7 @@ func updateToolsCmd(containerName, containerUser string) tea.Cmd {
 			}
 		} else if currentOpenhands == "not installed" {
 			result += "\nInstalling openhands...\n"
-			openhandsOut, err := userExec("~/.local/bin/uv tool install --python 3.12 openhands && ~/.local/bin/uv tool list | grep '^openhands '")
+			openhandsOut, err := userExec("~/.local/bin/uv tool install --python 3.12 openhands && timeout 5 ~/.local/bin/openhands --version")
 			result += openhandsOut
 			openhandsErr = err
 			if err != nil {
