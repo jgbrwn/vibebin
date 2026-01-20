@@ -1935,6 +1935,7 @@ echo "    • Deno      $(${USER_HOME}/.deno/bin/deno --version 2>/dev/null | he
 echo "    • uv        $(${USER_HOME}/.local/bin/uv --version 2>/dev/null | awk '{print $2}' || echo 'not found')"
 echo "    • opencode  $(${USER_HOME}/.opencode/bin/opencode --version 2>/dev/null || echo 'not found')"
 echo "    • nanocode  $(${USER_HOME}/.bun/bin/nanocode --version 2>/dev/null || echo 'not found')"
+echo "    • openhands $(${USER_HOME}/.local/bin/openhands --version 2>/dev/null | head -1 | awk '{print $2}' || echo 'not found')"
 echo ""
 echo "  ─────────────────────────────────────────────────────────────────────────────"
 echo "  AI Coding Agents:"
