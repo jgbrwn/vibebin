@@ -106,6 +106,7 @@ All tools support terminal and web UI modes. Configure your LLM credentials on f
 
 - **Fresh/minimal Linux installation**: Ubuntu 22.04+ or Debian 12+ (amd64 or arm64)
 - **VPS or VM**: Works on most virtualization platforms (KVM, VMware, Xen, EC2, GCP, Azure, etc.)
+- **Memory**: Minimum 4GB RAM; 8GB+ recommended for best performance
 - **Go 1.21+**: Required to build the tools (see Quick Start for installation)
 - **A domain name** with DNS you control
 - **A regular user with sudo access** (avoid running as root)
