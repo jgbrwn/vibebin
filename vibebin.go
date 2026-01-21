@@ -2293,7 +2293,7 @@ echo "    • Deno      $(${USER_HOME}/.deno/bin/deno --version 2>/dev/null | he
 echo "    • uv        $(${USER_HOME}/.local/bin/uv --version 2>/dev/null | awk '{print $2}' || echo 'not found')"
 echo "    • opencode  $(${USER_HOME}/.opencode/bin/opencode --version 2>/dev/null || echo 'not found')"
 echo "    • nanocode  $(${USER_HOME}/.bun/bin/nanocode --version 2>/dev/null || echo 'not found')"
-echo "    • openhands $(timeout 3 ${USER_HOME}/.local/bin/openhands --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || ${USER_HOME}/.local/bin/uv tool list 2>/dev/null | grep '^openhands ' | awk '{print $2}' || echo 'not found')"
+echo "    • openhands $(${USER_HOME}/.local/bin/uv tool list 2>/dev/null | grep openhands | awk '{print $2}' || echo 'not found')"
 echo ""
 echo "  ─────────────────────────────────────────────────────────────────────────────"
 echo "  AI Coding Agents:"
@@ -2498,17 +2498,14 @@ func updateToolsCmd(containerName, containerUser string) tea.Cmd {
 		}
 
 		// Get latest openhands version from PyPI API
-		latestOpenhandsOut, err := exec.Command("bash", "-c", "curl -s https://pypi.org/pypi/openhands/json | jq -r '.info.version // empty'").Output()
-		latestOpenhands := strings.TrimSpace(string(latestOpenhandsOut))
-		if err != nil || latestOpenhands == "" {
-			// Fallback to manual parsing if jq fails
-			rawOut, _ := exec.Command("curl", "-s", "https://pypi.org/pypi/openhands/json").Output()
-			if idx := strings.Index(string(rawOut), `"version": "`); idx >= 0 {
-				start := idx + len(`"version": "`)
-				end := strings.Index(string(rawOut)[start:], `"`)
-				if end > 0 {
-					latestOpenhands = string(rawOut)[start : start+end]
-				}
+		// Try jq first, then fall back to grep parsing
+		latestOpenhands := ""
+		if out, err := exec.Command("bash", "-c", "curl -s https://pypi.org/pypi/openhands/json | jq -r '.info.version // empty' 2>/dev/null").Output(); err == nil && len(strings.TrimSpace(string(out))) > 0 {
+			latestOpenhands = strings.TrimSpace(string(out))
+		} else {
+			// Fallback: use grep to extract version (works without jq)
+			if out, err := exec.Command("bash", "-c", `curl -s https://pypi.org/pypi/openhands/json | grep -o '"version": *"[^"]*"' | head -1 | grep -o '[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*'`).Output(); err == nil {
+				latestOpenhands = strings.TrimSpace(string(out))
 			}
 		}
 		
@@ -3598,7 +3595,7 @@ func (m model) viewImageSelect(title string) string {
 }
 
 func (m model) viewList() string {
-	s := "🐧 INCUS CONTAINER MANAGER\n"
+	s := "🐧 VIBEBIN MANAGER\n"
 	s += "═══════════════════════════════════════════════════════════════════════════════\n\n"
 	s += "[n] New  [Enter] Details  [d] Delete  [u] Untracked  [D] DNS Tokens\n"
 	s += "[i] Incus Logs  [l] Sync Logs  [q] Quit\n\n"

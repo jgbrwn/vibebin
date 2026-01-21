@@ -150,3 +150,13 @@ Licensed under the MIT License
 Source: https://github.com/charmbracelet/bubbles
 
 Used for TUI components (text input) in vibebin.
+
+================================================================================
+SQLite (modernc.org/sqlite)
+================================================================================
+SQLite is in the Public Domain
+Go binding: Copyright © 2019-present Jan Mercl
+Licensed under the BSD 3-Clause License
+Source: https://gitlab.com/cznic/sqlite
+
+Used for storing container metadata in vibebin (/var/lib/vibebin/containers.db).

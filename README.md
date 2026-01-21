@@ -4,6 +4,20 @@ An Incus/LXC-based platform for self-hosting persistent AI coding agent sandboxe
 
 Create and host your vibe-coded apps on a single VPS/server.
 
+## Screenshots
+
+**Vibebin TUI Manager** - Container detail view with quick actions:
+
+![Vibebin TUI](images/vibebin-tui.png)
+
+**AI Tools Admin Web App** - Toggle AI coding tools on/off:
+
+![AI Tools Admin - Manage](images/admin-manage.png)
+
+**AI Tools Admin Web App** - One-click update for all tools:
+
+![AI Tools Admin - Update](images/admin-update.png)
+
 ## *UPFRONT DISCLOSURE*
 
 This project is 99.9% vibe-coded on the [exe.dev](https://exe.dev/docs/list) platform using their Shelley Web AI Coding Agent and Claude Opus 4.5.
@@ -44,6 +58,7 @@ Each container is a fully persistent Linux sandbox running **Ubuntu 24.04 LTS (N
 | **Incus (LXC)** | Container runtime - lightweight, persistent Linux containers |
 | **Caddy** | Reverse proxy with automatic HTTPS (Let's Encrypt) |
 | **SSHPiper** | SSH routing - access any container via `ssh -p 2222 container-name@host` |
+| **SQLite** | Local database for container metadata (`/var/lib/vibebin/containers.db`) |
 | **Ubuntu/Debian** | Native Incus images (user choice during creation) |
 | **opencode** | Open source AI coding agent with terminal and web UI |
 | **nanocode** | NanoGPT-powered AI coding agent (fork of opencode) |
@@ -85,6 +100,7 @@ All tools support terminal and web UI modes. Configure your LLM credentials on f
 
 - `vibebin` - Interactive TUI for container management
 - `vibebin_sync_daemon` - Background service for config synchronization
+- `containers.db` - SQLite database storing container metadata (at `/var/lib/vibebin/containers.db`)
 
 ## Prerequisites
 
