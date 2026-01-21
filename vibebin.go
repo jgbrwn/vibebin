@@ -2919,6 +2919,22 @@ func (m model) handleDetailKeys(key string) (tea.Model, tea.Cmd) {
 }
 
 func (m model) handleInputKeys(key string) (tea.Model, tea.Cmd) {
+	// Handle Esc to cancel and return to list
+	if key == "esc" {
+		m.state = stateList
+		m.textInput.Reset()
+		m.textInput.EchoMode = textinput.EchoNormal
+		m.newDomain = ""
+		m.newDNSProvider = dnsNone
+		m.newDNSToken = ""
+		m.newAppPort = 0
+		m.newSSHKey = ""
+		m.newAuthUser = ""
+		m.newAuthPass = ""
+		m.status = "Container creation cancelled"
+		return m, clearStatusAfterDelay()
+	}
+
 	if key != "enter" {
 		return m, nil
 	}
