@@ -111,8 +111,8 @@ All administrative tasks should be performed as a regular user with `sudo` privi
 ### 1. Install Go (if not already installed)
 
 ```bash
-# Install wget & git
-sudo apt update && sudo apt install wget git
+# Install wget, curl & git
+sudo apt update && sudo apt install wget curl git
 
 # Ubuntu/Debian - install from official Go downloads
 wget https://go.dev/dl/go1.23.5.linux-amd64.tar.gz
