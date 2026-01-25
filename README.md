@@ -79,12 +79,16 @@ This project installs **opencode**, **nanocode**, and **openhands** in each cont
 
 #### nanocode
 
-[NanoCode](https://github.com/nanogpt-community/nanocode) is a fork of OpenCode configured to work with [NanoGPT](https://nano-gpt.com) as the default provider. It includes:
+[NanoCode](https://github.com/nanogpt-community/nanocode) is a fork of OpenCode configured to work with [NanoGPT](https://nano-gpt.com/subscription/hGfwRWc9) as the default provider. It includes:
 - Automatic model loading from NanoGPT API
 - Built-in NanoGPT MCP server
 - Interleaved thinking for reasoning models
 
+[NanoGPT subscription](https://nano-gpt.com/subscription/hGfwRWc9) is $8/month for 60,000 requests across all open models - an excellent value that works great with NanoCode.
+
 **Note:** The nanocode web UI requires LLM configuration before it will work. SSH into the container and run `nanocode` (CLI mode) first to configure your LLM provider/API keys.
+
+> *Disclosure: The NanoGPT link is an affiliate link.*
 
 #### openhands
 
