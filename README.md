@@ -217,17 +217,37 @@ The first run automatically installs:
 ### What Gets Installed in Each Container
 
 During container creation, the following is automatically installed:
+
+**Development Tools:**
 - **Docker** (via official get.docker.com script)
 - **Go** (latest version, architecture auto-detected)
 - **Node.js** (latest LTS via NodeSource)
 - **Bun** (JavaScript runtime and package manager)
 - **Deno** (JavaScript/TypeScript runtime)
 - **uv** (Python package manager from Astral)
+- **GitHub CLI** (`gh`) for GitHub operations
+- **Build tools** (build-essential, make, etc.)
+
+**AI Coding Agents:**
 - **opencode** (open source AI coding agent)
 - **nanocode** (NanoGPT-powered AI coding agent)
 - **openhands** (full-featured AI coding agent via uv with Python 3.12)
+
+**System Utilities:**
+- **Editors**: neovim, mc (Midnight Commander)
+- **Terminal multiplexers**: screen, tmux, byobu
+- **Monitoring**: htop, atop, btop, iotop, ncdu
+- **Networking**: dnsutils, net-tools, socat, lftp, ncftp
+- **Search**: ripgrep, sqlite3
+- **Media**: imagemagick, ffmpeg
+- **Fonts**: emoji support (fonts-noto-color-emoji, fonts-symbola)
+- And many more development and debugging utilities
+
+**Configuration:**
 - **Project directory** (`~/projects` for AI coding tool workspaces)
 - **Custom MOTD** (shows container info, URLs, and tool versions on SSH login)
+- **Passwordless sudo** for the container user
+- **Ping without sudo** (CAP_NET_RAW capability)
 
 ## ⚠️ Required: SSHPiper Manual Setup (After First Run)
 

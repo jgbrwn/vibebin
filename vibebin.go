@@ -1795,11 +1795,67 @@ func configureContainerEnvironment(containerName, containerUser, domain, sshKey 
 
 	// STEP 1: Ensure the container user exists with passwordless sudo
 	sendProgress(fmt.Sprintf("Ensuring user '%s' exists with sudo access...", containerUser))
-	if err := rootExec("apt-get", "update"); err != nil {
-		sendProgress(fmt.Sprintf("Warning: apt-get update failed: %v", err))
-	}
-	if err := rootExec("apt-get", "install", "-y", "sudo", "curl", "wget", "git", "make", "screen", "openssh-server", "unzip", "jq"); err != nil {
+	sendProgress("Installing base packages (this may take a few minutes)...")
+	basePackagesScript := `
+set -e
+export DEBIAN_FRONTEND=noninteractive
+apt-get update
+apt-get install -y \
+	sudo curl wget git make screen openssh-server unzip jq \
+	dnsutils software-properties-common sosreport gnupg dirmngr \
+	ripgrep sqlite3 neovim lsof python3-pip python-is-python3 python3-dns \
+	tree net-tools file build-essential pipx psmisc bsdmainutils socat rsync \
+	binutils dctrl-tools debootstrap lintian quilt devscripts diffstat dpkg-dev \
+	lftp ncftp dput python3-debian python3-debianbts python3-distro-info python3-ubuntutools \
+	mc byobu tmux man-db manpages manpages-dev htop atop btop iotop ncdu \
+	libglib2.0-0 libnss3 libxcomposite1 libxdamage1 libxi6 libxrandr2 libgbm1 libgtk-3-0 \
+	fonts-noto-color-emoji fonts-symbola fontconfig imagemagick ffmpeg
+echo "Base packages installed"
+`
+	if err := runScriptInContainer(containerName, basePackagesScript, "install-base-packages.sh"); err != nil {
 		sendProgress(fmt.Sprintf("Warning: Failed to install base packages: %v", err))
+	} else {
+		sendProgress("✅ Base packages installed")
+	}
+
+	// Install GitHub CLI (gh)
+	sendProgress("Installing GitHub CLI...")
+	ghScript := `
+set -e
+export DEBIAN_FRONTEND=noninteractive
+mkdir -p -m 755 /etc/apt/keyrings
+wget -nv -O /tmp/githubcli-archive-keyring.gpg https://cli.github.com/packages/githubcli-archive-keyring.gpg
+cat /tmp/githubcli-archive-keyring.gpg | tee /etc/apt/keyrings/githubcli-archive-keyring.gpg > /dev/null
+chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg
+mkdir -p -m 755 /etc/apt/sources.list.d
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+apt-get update
+apt-get install -y gh
+rm -f /tmp/githubcli-archive-keyring.gpg
+echo "GitHub CLI installed"
+`
+	if err := runScriptInContainer(containerName, ghScript, "install-gh.sh"); err != nil {
+		sendProgress(fmt.Sprintf("Warning: GitHub CLI installation failed: %v", err))
+	} else {
+		sendProgress("✅ GitHub CLI installed")
+	}
+
+	// Post-install configuration
+	sendProgress("Running post-install configuration...")
+	postInstallScript := `
+set -e
+# Allow non-root users to use ping without sudo
+setcap cap_net_raw=+ep /usr/bin/ping || true
+# Refresh font cache
+fc-cache -f -v > /dev/null 2>&1 || true
+# Clean up apt cache
+apt-get clean
+echo "Post-install configuration complete"
+`
+	if err := runScriptInContainer(containerName, postInstallScript, "post-install.sh"); err != nil {
+		sendProgress(fmt.Sprintf("Warning: Post-install configuration failed: %v", err))
+	} else {
+		sendProgress("✅ Post-install configuration complete")
 	}
 	
 	// Create user if doesn't exist, add to sudo group
@@ -1888,6 +1944,7 @@ echo "Go ${GO_VERSION} installed successfully"
 	sendProgress("Installing Node.js (latest LTS)...")
 	nodeInstallScript := `
 set -e
+export DEBIAN_FRONTEND=noninteractive
 curl -fsSL https://deb.nodesource.com/setup_lts.x | bash -
 apt-get install -y nodejs
 echo "Node.js $(node --version) installed successfully"
