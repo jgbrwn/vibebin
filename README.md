@@ -422,7 +422,7 @@ The admin app runs as a systemd service (`admin-app`) and is protected by the sa
 
 ### Updating AI Tools
 
-From the container detail view in the TUI, press `u` to update opencode and nanocode to their latest versions.
+From the container detail view in the TUI, press `u` to update opencode, nanocode, and openhands to their latest versions.
 
 ## SSH Access
 
@@ -476,9 +476,13 @@ Caddy will automatically obtain Let's Encrypt certificates for both domains.
 │  │  │ (Ubuntu/Debian)│  │ (Ubuntu/Debian)│              │     │
 │  │  │                │  │                │              │     │
 │  │  │  ┌───────────┐ │  │  ┌───────────┐ │              │     │
-│  │  │  │ opencode/ │ │  │  │ opencode/ │ │              │     │
-│  │  │  │ nanocode/ │ │  │  │ nanocode/ │ │              │     │
-│  │  │  │ openhands │ │  │  │ openhands │ │              │     │
+│  │  │  │ AI Coding │ │  │  │ AI Coding │ │              │     │
+│  │  │  │ Tool UI   │ │  │  │ Tool UI   │ │              │     │
+│  │  │  │  (:9999)  │ │  │  │  (:9999)  │ │              │     │
+│  │  │  └───────────┘ │  │  └───────────┘ │              │     │
+│  │  │  ┌───────────┐ │  │  ┌───────────┐ │              │     │
+│  │  │  │admin.code │ │  │  │admin.code │ │              │     │
+│  │  │  │  (:8099)  │ │  │  │  (:8099)  │ │              │     │
 │  │  │  └───────────┘ │  │  └───────────┘ │              │     │
 │  │  │  ┌───────────┐ │  │  ┌───────────┐ │              │     │
 │  │  │  │ Your App  │ │  │  │ Your App  │ │              │     │
