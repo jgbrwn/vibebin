@@ -611,11 +611,11 @@ Each container created by vibebin is fully isolated by default:
 
 ### Network Isolation
 - Each container gets its own private IP on an internal bridge network (typically `10.x.x.x`)
-- Containers **cannot directly communicate with each other** by default
+- Containers can communicate with each other by default as they are on the same bridge network on the host
 - All external access is routed through:
   - **Caddy** (HTTPS reverse proxy) for web traffic
   - **SSHPiper** (port 2222) for SSH access
-- Each container only exposes what's explicitly configured (app port, code UI port)
+- Each container only exposes what's explicitly configured (by default this is: app port/8000 (configurable), code UI port/9999, admin.code/8099)
 
 ### Process Isolation
 - Containers use Linux namespaces (PID, network, mount, user, etc.)
