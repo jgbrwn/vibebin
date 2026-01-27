@@ -2161,7 +2161,7 @@ npm run build 2>&1 | tail -3
 cd ..
 
 echo "Building Shelley binary..."
-go build -o /usr/local/bin/shelley ./cmd/shelley 2>&1
+/usr/local/go/bin/go build -o /usr/local/bin/shelley ./cmd/shelley 2>&1
 chmod 755 /usr/local/bin/shelley
 
 echo "Cleaning up..."
@@ -2509,7 +2509,7 @@ func handleUpdate(w http.ResponseWriter, r *http.Request) {
 		"echo \"Building UI...\"\n" +
 		"cd ui && npm install --silent 2>&1 | tail -1 && npm run build 2>&1 | tail -1 && cd ..\n" +
 		"echo \"Building binary...\"\n" +
-		"sudo go build -o /usr/local/bin/shelley ./cmd/shelley 2>&1\n" +
+		"sudo /usr/local/go/bin/go build -o /usr/local/bin/shelley ./cmd/shelley 2>&1\n" +
 		"sudo chmod 755 /usr/local/bin/shelley\n" +
 		"rm -rf \"$BUILD_DIR\"\n" +
 		"/usr/local/bin/shelley version | grep version\n" +
@@ -2549,7 +2549,6 @@ func handleUpdate(w http.ResponseWriter, r *http.Request) {
 				send(fmt.Sprintf("✅ Shelley installed (version %s)\n", v))
 			} else {
 				send("✅ Shelley installed\n")
-			}
 			}
 		}
 	}
@@ -2957,7 +2956,7 @@ sed -i 's|// Get hostname (add .exe.xyz suffix if no dots, matching system_promp
 echo "Building UI..."
 cd ui && npm install --silent 2>&1 | tail -2 && npm run build 2>&1 | tail -2 && cd ..
 echo "Building Shelley binary..."
-go build -o /usr/local/bin/shelley ./cmd/shelley 2>&1
+/usr/local/go/bin/go build -o /usr/local/bin/shelley ./cmd/shelley 2>&1
 chmod 755 /usr/local/bin/shelley
 rm -rf "$BUILD_DIR"
 echo "Verifying..."
