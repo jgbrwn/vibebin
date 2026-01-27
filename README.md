@@ -35,7 +35,7 @@ This project provides the infrastructure to self-host your own AI coding environ
 
 Each container is a fully persistent Linux sandbox running **Ubuntu 24.04 LTS (Noble)** or **Debian 13 (Trixie)**, with:
 
-- **[opencode](https://github.com/anomalyco/opencode)**, **[nanocode](https://github.com/nanogpt-community/nanocode)**, and **[openhands](https://github.com/All-Hands-AI/OpenHands)** - AI coding agents with terminal and web UI interfaces
+- **[opencode](https://github.com/anomalyco/opencode)**, **[nanocode](https://github.com/nanogpt-community/nanocode)**, and **[Shelley](https://github.com/boldsoftware/shelley)** - AI coding agents with terminal and web UI interfaces
 - **AI coding web UI** accessible via HTTPS at `code.yourdomain.com` (Basic Auth protected)
 - **AI Tools Admin** web app at `admin.code.yourdomain.com` for managing AI coding tools
 - **Your app/site** accessible via HTTPS at `yourdomain.com`
@@ -45,7 +45,7 @@ Each container is a fully persistent Linux sandbox running **Ubuntu 24.04 LTS (N
 
 ### Use Cases
 
-- **AI-assisted development**: Use opencode/nanocode/openhands as your AI pair programmer with full system access
+- **AI-assisted development**: Use opencode/nanocode/shelley as your AI pair programmer with full system access
 - **Vibe coding**: Spin up isolated sandboxes for experimental projects
 - **App/site hosting**: Deploy and iterate on web applications
 - **Learning environments**: Safe, isolated Linux environments for experimentation
@@ -62,11 +62,11 @@ Each container is a fully persistent Linux sandbox running **Ubuntu 24.04 LTS (N
 | **Ubuntu/Debian** | Native Incus images (user choice during creation) |
 | **opencode** | Open source AI coding agent with terminal and web UI |
 | **nanocode** | NanoGPT-powered AI coding agent (fork of opencode) |
-| **openhands** | Full-featured AI coding agent from All-Hands-AI |
+| **shelley** | AI coding web agent from Bold Software |
 
 ### AI Coding Agents
 
-This project installs **opencode**, **nanocode**, and **openhands** in each container:
+This project installs **opencode**, **nanocode**, and **shelley** in each container:
 
 #### opencode
 
@@ -90,13 +90,15 @@ This project installs **opencode**, **nanocode**, and **openhands** in each cont
 
 > *Disclosure: The NanoGPT link is an affiliate link.*
 
-#### openhands
+#### shelley
 
-[OpenHands](https://github.com/All-Hands-AI/OpenHands) (formerly OpenDevin) is a powerful AI coding agent with:
-- Full agentic capabilities with file editing, terminal access, and web browsing
-- Support for multiple LLM providers (Anthropic, OpenAI, etc.)
-- Persistent workspace and history
-- Best used with Python 3.12 (installed automatically via uv)
+[Shelley](https://github.com/boldsoftware/shelley) is a powerful AI web agent from Bold Software:
+- Web-based UI only (no CLI mode)
+- Support for multiple LLM providers via environment variables (Anthropic, OpenAI, Gemini, Fireworks)
+- Custom model configuration available within the web UI
+- Runs on port 9999 like the other AI tools
+
+**Note:** Before starting Shelley, add your API keys to `~/.shelley_env`. Custom models can be configured in Shelley's web UI, but doing so switches to "custom model mode" and the env var models will no longer be shown.
 
 All tools support terminal and web UI modes. Configure your LLM credentials on first run.
 
@@ -245,7 +247,7 @@ During container creation, the following is automatically installed:
 **AI Coding Agents:**
 - **opencode** (open source AI coding agent)
 - **nanocode** (NanoGPT-powered AI coding agent)
-- **openhands** (full-featured AI coding agent via uv with Python 3.12)
+- **shelley** (AI web agent from Bold Software)
 
 **System Utilities:**
 - **Editors**: neovim, mc (Midnight Commander)
@@ -310,7 +312,7 @@ sudo vibebin
 - `p` - Change app port
 - `a` - Change auth credentials
 - `S` - Snapshot management
-- `u` - Update AI coding tools (opencode/nanocode/openhands)
+- `u` - Update AI coding tools (opencode/nanocode/shelley)
 - `Esc` - Back to list
 
 **Snapshot View:**
@@ -339,7 +341,7 @@ sudo vibebin
 ### AI Coding Agents
 - **opencode**: Open source, supports multiple LLM providers
 - **nanocode**: NanoGPT-optimized fork with built-in features
-- **openhands**: Full-featured AI agent with file editing, terminal, and web browsing
+- **shelley**: AI web agent with full coding capabilities
 - **Easy Configuration**: All tools prompt for API keys on first run
 - **Web UI Access**: Start any tool in serve mode on port 9999
 
@@ -362,11 +364,9 @@ opencode
 # Or run nanocode
 nanocode
 
-# Or run openhands CLI
-openhands
 ```
 
-All tools will prompt you to configure your LLM provider and API key on first run.
+All tools will prompt you to configure your LLM provider and API key on first run. Note that Shelley is web-only (no CLI mode).
 
 ### Web UI Mode
 
@@ -393,19 +393,14 @@ nanocode serve --port 9999 --hostname 0.0.0.0
 
 > **Note:** nanocode web UI requires LLM configuration first. Run `nanocode` (CLI) to configure your provider/API keys before starting the web UI.
 
-**openhands** (uses Docker, mounts `~/projects` as workspace):
+**shelley** (web UI only - no CLI mode):
 ```bash
+cd ~/projects
 screen -S code
-docker run -it --rm --pull=always \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  -v ~/.openhands:/.openhands \
-  -p 9999:3000 \
-  --add-host host.docker.internal:host-gateway \
-  -e SANDBOX_VOLUMES=~/projects:/workspace:rw \
-  -e SANDBOX_USER_ID=$(id -u) \
-  --name openhands-app \
-  docker.all-hands.dev/all-hands-ai/openhands:latest
+start-shelley.sh 2>&1 | tee -a ~/.shelley.log
 ```
+
+> **Note:** Before starting Shelley, add your API keys to `~/.shelley_env`. Custom models can be configured in Shelley's web UI, but doing so switches to "custom model mode" and the env var models will no longer be shown.
 
 Then access via `https://code.yourdomain.com` (protected by Basic Auth credentials you set during container creation).
 
@@ -419,7 +414,7 @@ Press `Ctrl+A, D` to detach from screen. Reattach with `screen -x code`.
 Each container includes an **AI Tools Admin** web app accessible at `https://admin.code.yourdomain.com`. This provides:
 
 **MANAGE View:**
-- Toggle AI coding tools (OpenCode, NanoCode, OpenHands) on/off
+- Toggle AI coding tools (OpenCode, NanoCode, Shelley) on/off
 - Only one tool can run at a time on port 9999
 - View real-time output logs
 - Links to App URL and Code UI
@@ -432,11 +427,11 @@ Each container includes an **AI Tools Admin** web app accessible at `https://adm
 
 The admin app runs as a systemd service (`admin-app`) and is protected by the same Basic Auth credentials as the Code UI.
 
-> **Note**: For OpenHands, the first start may take 2-5 minutes while Docker images are downloaded.
+> **Note**: For Shelley, ensure your API keys are configured in `~/.shelley_env` before starting.
 
 ### Updating AI Tools
 
-From the container detail view in the TUI, press `u` to update opencode, nanocode, and openhands to their latest versions.
+From the container detail view in the TUI, press `u` to update opencode, nanocode, and shelley to their latest versions.
 
 ## SSH Access
 
@@ -571,9 +566,9 @@ incus info container-name
 - Verify upstream config: `cat /var/lib/sshpiper/container-name/sshpiper_upstream`
 
 **AI coding tools not working:**
-- SSH to the container and run `opencode`, `nanocode`, or `openhands` interactively
+- SSH to the container and run `opencode` or `nanocode` interactively, or `start-shelley.sh` for Shelley web UI
 - All tools will prompt for API key configuration on first run
-- Check tool versions: `opencode --version`, `nanocode --version`, `openhands --version`
+- Check tool versions: `opencode --version`, `nanocode --version`, `shelley version`
 
 **Sync daemon issues:**
 ```bash
@@ -624,13 +619,13 @@ Each container created by vibebin is fully isolated by default:
 
 ### Security Note
 
-`security.nesting=true` is enabled to allow Docker-in-container (needed for OpenHands). This is standard for development environments but worth noting for security-sensitive deployments.
+`security.nesting=true` is enabled to allow Docker-in-container (useful for development). This is standard for development environments but worth noting for security-sensitive deployments.
 
 ### In Practice
 
 If you run 3 containers (app1.example.com, app2.example.com, app3.example.com):
 - Each has its own isolated Linux environment
-- Each has its own AI tools installation (opencode, nanocode, openhands)
+- Each has its own AI tools installation (opencode, nanocode, shelley)
 - An agent in app1 cannot access files or processes in app2 or app3
 - They share the host's resources (CPU, RAM) but are otherwise independent
 
@@ -663,7 +658,7 @@ This project is licensed under the MIT License. See [LICENSE](LICENSE) for detai
 
 - **opencode**: [anomalyco/opencode](https://github.com/anomalyco/opencode) - MIT License
 - **nanocode**: [nanogpt-community/nanocode](https://github.com/nanogpt-community/nanocode) - Fork of opencode
-- **openhands**: [All-Hands-AI/OpenHands](https://github.com/All-Hands-AI/OpenHands) - MIT License
+- **shelley**: [boldsoftware/shelley](https://github.com/boldsoftware/shelley) - Apache License 2.0
 - **Incus**: [linuxcontainers/incus](https://github.com/lxc/incus) - Apache 2.0 License
 - **Caddy**: [caddyserver/caddy](https://github.com/caddyserver/caddy) - Apache 2.0 License
 - **SSHPiper**: [tg123/sshpiper](https://github.com/tg123/sshpiper) - MIT License

@@ -26,15 +26,16 @@ Installed via bun during container creation.
 ================================================================================
 
 ================================================================================
-OpenHands (formerly OpenDevin)
+Shelley Web Agent
 ================================================================================
-Copyright © 2024-present All-Hands-AI
-Licensed under the MIT License
-Source: https://github.com/All-Hands-AI/OpenHands
+Copyright © 2024-present Bold Software
+Licensed under the Apache License, Version 2.0
+Source: https://github.com/boldsoftware/shelley
 
-Used as an AI coding agent with full agentic capabilities inside containers.
-Installed via uv (Python 3.12) during container creation.
+Used as an AI web coding agent inside containers.
+Installed as a binary during container creation.
 
+================================================================================
 Incus (Linux Containers)
 ================================================================================
 Copyright © 2023-present Linux Containers project

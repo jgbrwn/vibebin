@@ -2130,18 +2130,70 @@ echo "Node.js $(node --version) installed successfully"
 		sendProgress("✅ nanocode installed")
 	}
 
-	// STEP 10b: Install openhands (requires uv)
-	sendProgress("Installing openhands...")
-	if err := userExec("~/.local/bin/uv tool install --python 3.12 openhands"); err != nil {
-		sendProgress(fmt.Sprintf("Warning: openhands installation failed: %v", err))
+	// STEP 10b: Install Shelley Web Agent
+	sendProgress("Installing Shelley Web Agent...")
+	if err := rootExec(`curl -Lo /usr/local/bin/shelley "https://github.com/boldsoftware/shelley/releases/latest/download/shelley_linux_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')" && chmod +x /usr/local/bin/shelley`); err != nil {
+		sendProgress(fmt.Sprintf("Warning: Shelley installation failed: %v", err))
 	} else {
-		sendProgress("✅ openhands installed")
+		sendProgress("✅ Shelley installed")
 	}
+
+	// Create start-shelley.sh wrapper script
+	startShelleyScript := `#!/bin/bash
+
+# Load environment variables from .shelley_env file
+if [ -f ~/.shelley_env ]; then
+    set -a
+    source ~/.shelley_env
+    set +a
+else
+    echo "Warning: ~/.shelley_env file not found. Shelley may not have access to LLM providers."
+    echo "Create ~/.shelley_env with your API keys (ANTHROPIC_API_KEY, OPENAI_API_KEY, etc.)"
+fi
+
+# Start Shelley (global flags go before the command)
+exec /usr/local/bin/shelley serve -port 9999
+`
+	tmpStartShelley, _ := os.CreateTemp("", "start-shelley-*.sh")
+	tmpStartShelley.WriteString(startShelleyScript)
+	tmpStartShelley.Close()
+	exec.Command("incus", "file", "push", tmpStartShelley.Name(), containerName+"/usr/local/bin/start-shelley.sh").Run()
+	os.Remove(tmpStartShelley.Name())
+	rootExec("chmod +x /usr/local/bin/start-shelley.sh")
+	sendProgress("✅ start-shelley.sh wrapper created")
+
+	// Create .shelley_env template file for the user
+	shelleyEnvTemplate := `# Shelley Web Agent API Keys
+# Add your API keys below. Shelley will use these when started via start-shelley.sh
+# See: https://github.com/boldsoftware/shelley
+
+# Anthropic (Claude)
+ANTHROPIC_API_KEY=
+
+# OpenAI (GPT-4, etc.)
+OPENAI_API_KEY=
+
+# Google (Gemini)
+GEMINI_API_KEY=
+
+# Fireworks AI
+FIREWORKS_API_KEY=
+
+# Note: You can also configure custom models within Shelley's web UI,
+# but doing so switches to "custom model mode" and these env var models
+# will no longer be shown.
+`
+	tmpShelleyEnv, _ := os.CreateTemp("", "shelley-env-*")
+	tmpShelleyEnv.WriteString(shelleyEnvTemplate)
+	tmpShelleyEnv.Close()
+	exec.Command("incus", "file", "push", tmpShelleyEnv.Name(), containerName+fmt.Sprintf("/home/%s/.shelley_env", containerUser)).Run()
+	os.Remove(tmpShelleyEnv.Name())
+	userExec("chmod 600 ~/.shelley_env")
+	sendProgress("✅ .shelley_env template created")
 
 	// STEP 10c: Create project directories for AI coding tools
 	sendProgress("Creating project directory...")
 	userExec("mkdir -p ~/projects")
-	userExec("mkdir -p ~/.openhands")
 	sendProgress("✅ Project directory created")
 
 	// STEP 10d: Setup AI Tools Admin webapp
@@ -2210,7 +2262,6 @@ func main() {
 		state.domain = strings.TrimSpace(string(data))
 	}
 	os.MkdirAll(filepath.Join(state.homeDir, ProjectsDir), 0755)
-	os.MkdirAll(filepath.Join(state.homeDir, ".openhands"), 0755)
 	os.MkdirAll(filepath.Join(state.homeDir, "admin.code", "logs"), 0755)
 	state.detectActiveTool()
 	http.HandleFunc("/", handleIndex)
@@ -2229,9 +2280,15 @@ func (s *AppState) detectActiveTool() {
 	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", WebUIPort), time.Second)
 	if err != nil { s.activeTool = ""; return }
 	conn.Close()
-	out, _ := exec.Command("docker", "ps", "--filter", "name=openhands-app", "--format", "{{.Names}}").Output()
-	if strings.TrimSpace(string(out)) == "openhands-app" { s.activeTool = "openhands"; return }
-	out, _ = exec.Command("bash", "-c", "pgrep -af 'opencode serve|nanocode serve' 2>/dev/null | head -1").Output()
+	// Check which process is actually listening on the port using lsof
+	out, _ := exec.Command("bash", "-c", "lsof -i :9999 -t 2>/dev/null | head -1 | xargs -r ps -p -o comm= 2>/dev/null").Output()
+	procName := strings.TrimSpace(string(out))
+	if strings.Contains(procName, "shelley") { s.activeTool = "shelley"; return }
+	if strings.Contains(procName, "opencode") { s.activeTool = "opencode"; return }
+	if strings.Contains(procName, "nanocode") || strings.Contains(procName, "bun") { s.activeTool = "nanocode"; return }
+	// Fallback: check running processes
+	out, _ = exec.Command("bash", "-c", "pgrep -af 'opencode serve|nanocode serve|shelley serve' 2>/dev/null | head -1").Output()
+	if strings.Contains(string(out), "shelley") { s.activeTool = "shelley" }
 	if strings.Contains(string(out), "opencode") { s.activeTool = "opencode" }
 	if strings.Contains(string(out), "nanocode") { s.activeTool = "nanocode" }
 }
@@ -2252,7 +2309,7 @@ func handleStatus(w http.ResponseWriter, r *http.Request) {
 	tools := []Tool{
 		{Name: "opencode", DisplayName: "OpenCode", Active: at == "opencode"},
 		{Name: "nanocode", DisplayName: "NanoCode", Active: at == "nanocode"},
-		{Name: "openhands", DisplayName: "OpenHands", Active: at == "openhands"},
+		{Name: "shelley", DisplayName: "Shelley", Active: at == "shelley"},
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"tools": tools, "activeTool": at})
@@ -2286,10 +2343,9 @@ func startTool(tool string) error {
 	switch tool {
 	case "opencode": cmd = exec.Command("bash", "-c", fmt.Sprintf("cd %s && %s/.opencode/bin/opencode serve --port %d --hostname 0.0.0.0", proj, state.homeDir, WebUIPort))
 	case "nanocode": cmd = exec.Command("bash", "-c", fmt.Sprintf("cd %s && %s/.bun/bin/nanocode serve --port %d --hostname 0.0.0.0", proj, state.homeDir, WebUIPort))
-	case "openhands":
-		uid := os.Getuid()
-		cmd = exec.Command("bash", "-c", fmt.Sprintf("docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v %s/.openhands:/.openhands -p %d:3000 --add-host host.docker.internal:host-gateway -e SANDBOX_VOLUMES=%s:/workspace:rw -e SANDBOX_USER_ID=%d --name openhands-app docker.all-hands.dev/all-hands-ai/openhands:latest", state.homeDir, WebUIPort, proj, uid))
-		fmt.Fprintf(logFile, "Note: OpenHands may take 2-5 minutes on first run...\n")
+	case "shelley":
+		cmd = exec.Command("bash", "-c", fmt.Sprintf("cd %s && /usr/local/bin/start-shelley.sh", proj))
+		fmt.Fprintf(logFile, "Note: Shelley requires API keys in ~/.shelley_env\n")
 	default: logFile.Close(); return fmt.Errorf("unknown tool: %s", tool)
 	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -2306,11 +2362,10 @@ func stopTool(tool string) {
 	logFile, _ := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 	defer logFile.Close()
 	fmt.Fprintf(logFile, "\n=== Stopping %s at %s ===\n", tool, time.Now().Format("2006-01-02 15:04:05"))
+	if state.activeProcess != nil && state.activePID > 0 { syscall.Kill(-state.activePID, syscall.SIGTERM); time.Sleep(500*time.Millisecond); syscall.Kill(-state.activePID, syscall.SIGKILL) }
 	switch tool {
-	case "openhands": exec.Command("docker", "stop", "openhands-app").Run(); exec.Command("docker", "rm", "-f", "openhands-app").Run()
-	default:
-		if state.activeProcess != nil && state.activePID > 0 { syscall.Kill(-state.activePID, syscall.SIGTERM); time.Sleep(500*time.Millisecond); syscall.Kill(-state.activePID, syscall.SIGKILL) }
-		exec.Command("pkill", "-f", tool+" serve").Run()
+	case "shelley": exec.Command("pkill", "-f", "shelley serve").Run()
+	default: exec.Command("pkill", "-f", tool+" serve").Run()
 	}
 	fmt.Fprintf(logFile, "=== %s stopped ===\n", tool)
 }
@@ -2335,30 +2390,43 @@ func handleUpdate(w http.ResponseWriter, r *http.Request) {
 	if state.activeTool != "" { stopTool(state.activeTool); state.activeTool = ""; state.activeProcess = nil; state.activePID = 0 }
 	state.mu.Unlock()
 	exec.Command("pkill", "-f", "opencode serve").Run(); exec.Command("pkill", "-f", "nanocode serve").Run()
-	exec.Command("docker", "stop", "openhands-app").Run(); exec.Command("docker", "rm", "-f", "openhands-app").Run()
+	exec.Command("pkill", "-f", "shelley serve").Run()
 	time.Sleep(time.Second)
 	send("✅ Processes stopped\n")
-	send("\n📦 [1/4] Updating opencode...")
+	// Get current versions
+	currentOpencode, _ := exec.Command("bash", "-c", "$HOME/.opencode/bin/opencode --version 2>/dev/null || echo 'not installed'").Output()
+	currentNanocode, _ := exec.Command("bash", "-c", "$HOME/.bun/bin/nanocode --version 2>/dev/null || echo 'not installed'").Output()
+	currentShelley, _ := exec.Command("bash", "-c", "/usr/local/bin/shelley version 2>/dev/null | grep '\"version\"' | cut -d'\"' -f4 || echo 'not installed'").Output()
+	send(fmt.Sprintf("Current: opencode %s, nanocode %s, shelley %s\n", strings.TrimSpace(string(currentOpencode)), strings.TrimSpace(string(currentNanocode)), strings.TrimSpace(string(currentShelley))))
+	send("\n📦 [1/3] Updating opencode...")
 	send("Running: curl -fsSL https://opencode.ai/install | bash")
 	out, _ := exec.Command("bash", "-c", "curl -fsSL https://opencode.ai/install 2>/dev/null | bash 2>&1 | tail -5").CombinedOutput()
 	if len(strings.TrimSpace(string(out))) > 0 { send(string(out)) }
 	send("✅ opencode updated\n")
-	send("\n📦 [2/4] Updating nanocode...")
+	send("\n📦 [2/3] Updating nanocode...")
 	send("Running: bun i -g nanocode@latest")
 	out, _ = exec.Command("bash", "-c", "export PATH=$PATH:$HOME/.bun/bin && bun i -g nanocode@latest 2>&1 | grep -v '^$'").CombinedOutput()
 	if len(strings.TrimSpace(string(out))) > 0 { send(string(out)) }
 	send("✅ nanocode updated\n")
-	send("\n📦 [3/4] Updating openhands CLI...")
-	send("Running: uv tool install --python 3.12 openhands")
-	out, _ = exec.Command("bash", "-c", "$HOME/.local/bin/uv tool uninstall openhands 2>/dev/null; $HOME/.local/bin/uv tool install --python 3.12 openhands 2>&1 | grep -v '^$'").CombinedOutput()
-	if len(strings.TrimSpace(string(out))) > 0 { send(string(out)) }
-	send("✅ openhands CLI updated\n")
-	send("\n🐳 [4/4] Pulling OpenHands Docker image...")
-	send("Running: docker pull docker.all-hands.dev/all-hands-ai/openhands:latest")
-	send("(This may take a few minutes...)")
-	out, _ = exec.Command("bash", "-c", "docker pull docker.all-hands.dev/all-hands-ai/openhands:latest 2>&1 | grep -E '^(latest:|[a-f0-9]+:|Status:|Digest:)'").CombinedOutput()
-	if len(strings.TrimSpace(string(out))) > 0 { send(string(out)) }
-	send("✅ Docker image updated\n")
+	// Get latest Shelley version from GitHub
+	latestShelley, _ := exec.Command("bash", "-c", "curl -sI https://github.com/boldsoftware/shelley/releases/latest 2>/dev/null | grep -i '^location:' | sed 's|.*/v||' | tr -d '\\r\\n' || echo ''").Output()
+	latestShelleyStr := strings.TrimSpace(string(latestShelley))
+	currentShelleyStr := strings.TrimSpace(string(currentShelley))
+	send(fmt.Sprintf("\n📦 [3/3] Updating Shelley (current: %s, latest: %s)...", currentShelleyStr, latestShelleyStr))
+	shelleyUpdateCmd := "sudo curl -Lo /usr/local/bin/shelley \"https://github.com/boldsoftware/shelley/releases/latest/download/shelley_linux_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')\" && sudo chmod +x /usr/local/bin/shelley 2>&1"
+	if latestShelleyStr != "" && currentShelleyStr != latestShelleyStr && currentShelleyStr != "not installed" {
+		send("Running: curl -Lo /usr/local/bin/shelley ...")
+		out, _ = exec.Command("bash", "-c", shelleyUpdateCmd).CombinedOutput()
+		if len(strings.TrimSpace(string(out))) > 0 { send(string(out)) }
+		send("✅ Shelley updated\n")
+	} else if currentShelleyStr == latestShelleyStr {
+		send("Already at latest version\n")
+	} else {
+		send("Installing Shelley...")
+		out, _ = exec.Command("bash", "-c", shelleyUpdateCmd).CombinedOutput()
+		if len(strings.TrimSpace(string(out))) > 0 { send(string(out)) }
+		send("✅ Shelley installed\n")
+	}
 	send("\n🎉 All updates complete!"); send("DONE")
 }
 
@@ -2377,9 +2445,9 @@ var indexHTML = ` + "`" + `<!DOCTYPE html>
 <div class="mt"><div class="tc"><button class="tb active" data-v="manage">MANAGE</button><button class="tb" data-v="update">UPDATE</button></div></div>
 <section id="manage-section" class="sec active"><div id="tools"><div class="card" data-t="opencode"><div class="ti"><div class="icon">🔷</div><div><div class="tn">OpenCode</div><div class="ts" id="st-opencode">Stopped</div></div></div><label class="sw"><input type="checkbox" id="tg-opencode" onchange="tog('opencode',this.checked)"><span class="sl"></span></label></div>
 <div class="card" data-t="nanocode"><div class="ti"><div class="icon">🟣</div><div><div class="tn">NanoCode</div><div class="ts" id="st-nanocode">Stopped</div></div></div><label class="sw"><input type="checkbox" id="tg-nanocode" onchange="tog('nanocode',this.checked)"><span class="sl"></span></label></div>
-<div class="card" data-t="openhands"><div class="ti"><div class="icon">🖐️</div><div><div class="tn">OpenHands</div><div class="ts" id="st-openhands">Stopped</div></div></div><label class="sw"><input type="checkbox" id="tg-openhands" onchange="tog('openhands',this.checked)"><span class="sl"></span></label></div></div>
+<div class="card" data-t="shelley"><div class="ti"><div class="icon">🐚</div><div><div class="tn">Shelley</div><div class="ts" id="st-shelley">Stopped</div></div></div><label class="sw"><input type="checkbox" id="tg-shelley" onchange="tog('shelley',this.checked)"><span class="sl"></span></label></div></div>
 <div class="ls"><div class="lh"><span class="lt">📋 Tool Output Log</span></div><div class="lv" id="log"><div class="ll">No logs yet.</div></div></div></section>
-<section id="update-section" class="sec"><div class="uw"><h3>⚠️ Before updating</h3><ul><li>Toggle off all tools in MANAGE</li><li>No AI tools running in CLI</li><li>Update stops running processes</li><li>Updates OpenCode, NanoCode, OpenHands</li></ul></div><button class="ub" id="ubtn" onclick="upd()">🚀 Update All Tools</button><div class="up" id="uprog"><div class="lv" id="ulog"></div></div></section>
+<section id="update-section" class="sec"><div class="uw"><h3>⚠️ Before updating</h3><ul><li>Toggle off all tools in MANAGE</li><li>No AI tools running in CLI</li><li>Update stops running processes</li><li>Updates OpenCode, NanoCode, Shelley</li></ul></div><button class="ub" id="ubtn" onclick="upd()">🚀 Update All Tools</button><div class="up" id="uprog"><div class="lv" id="ulog"></div></div></section>
 <footer>Powered by <a href="https://github.com/jgbrwn/vibebin">vibebin</a></footer></div>
 <script>let updating=false;document.querySelectorAll('.tb').forEach(b=>b.onclick=()=>{document.querySelectorAll('.tb').forEach(x=>x.classList.remove('active'));b.classList.add('active');document.querySelectorAll('.sec').forEach(s=>s.classList.remove('active'));document.getElementById(b.dataset.v+'-section').classList.add('active')});
 async function fst(){try{const r=await fetch('/api/status'),d=await r.json();d.tools.forEach(t=>{const c=document.querySelector('[data-t="'+t.name+'"]'),g=document.getElementById('tg-'+t.name),s=document.getElementById('st-'+t.name);if(t.active){c.classList.add('active');g.checked=true;s.textContent='Running';s.classList.add('run')}else{c.classList.remove('active');g.checked=false;s.textContent='Stopped';s.classList.remove('run')}})}catch(e){}}
@@ -2477,11 +2545,11 @@ echo "    • Deno      $(${USER_HOME}/.deno/bin/deno --version 2>/dev/null | he
 echo "    • uv        $(${USER_HOME}/.local/bin/uv --version 2>/dev/null | awk '{print $2}' || echo 'not found')"
 echo "    • opencode  $(${USER_HOME}/.opencode/bin/opencode --version 2>/dev/null || echo 'not found')"
 echo "    • nanocode  $(${USER_HOME}/.bun/bin/nanocode --version 2>/dev/null || echo 'not found')"
-echo "    • openhands $(${USER_HOME}/.local/bin/uv tool list 2>/dev/null | grep openhands | awk '{print $2}' || echo 'not found')"
+echo "    • shelley   $(/usr/local/bin/shelley version 2>/dev/null | grep '\"version\"' | cut -d'\"' -f4 || echo 'not found')"
 echo ""
 echo "  ─────────────────────────────────────────────────────────────────────────────"
 echo "  AI Coding Agents:"
-echo "    Configure your LLM provider/API keys within each tool on first run."
+echo "    ★ MANAGE ALL TOOLS VIA: https://admin.code.%s"
 echo "    Note: Only one web UI can run on port 9999 at a time."
 echo ""
 echo "    Project directory: ~/projects"
@@ -2495,16 +2563,11 @@ echo "      CLI:    nanocode"
 echo "      Web UI: nanocode serve --port 9999 --hostname 0.0.0.0"
 echo "      NOTE:   Web UI requires LLM config first - run 'nanocode' CLI to configure"
 echo ""
-echo "    openhands (uses Docker, mounts ~/projects as workspace):"
-echo "      docker run -it --rm --pull=always \\"
-echo "        -v /var/run/docker.sock:/var/run/docker.sock \\"
-echo "        -v ~/.openhands:/.openhands \\"
-echo "        -p 9999:3000 \\"
-echo "        --add-host host.docker.internal:host-gateway \\"
-echo "        -e SANDBOX_VOLUMES=~/projects:/workspace:rw \\"
-echo "        -e SANDBOX_USER_ID=\$(id -u) \\"
-echo "        --name openhands-app \\"
-echo "        docker.all-hands.dev/all-hands-ai/openhands:latest"
+echo "    shelley (Web UI only - no CLI mode):"
+echo "      start-shelley.sh 2>&1 | tee -a ~/.shelley.log"
+echo "      NOTE: Add API keys to ~/.shelley_env before starting"
+echo "            Custom models can be configured in Shelley's UI,"
+echo "            but this disables env var models."
 echo ""
 echo "    Then access web UI via: https://code.%s"
 echo ""
@@ -2512,7 +2575,7 @@ echo "  ────────────────────────
 echo "  Documentation: https://github.com/jgbrwn/vibebin"
 echo "═══════════════════════════════════════════════════════════════════════════════"
 echo ""
-`, containerUser, containerName, domain, domain, domain, domain)
+`, containerUser, containerName, domain, domain, domain, domain, domain)
 	tmpMotd, _ := os.CreateTemp("", "99-incus-manager")
 	tmpMotd.WriteString(motdScript)
 	tmpMotd.Close()
@@ -2616,13 +2679,13 @@ func updateToolsCmd(containerName, containerUser string) tea.Cmd {
 
 		// Step 1: Check for running processes
 		result += "Checking for running processes...\n"
-		runningProcs, _ := rootExec("pgrep -af 'opencode|nanocode|openhands' 2>/dev/null | grep -v pgrep || true")
+		runningProcs, _ := rootExec("pgrep -af 'opencode|nanocode|shelley' 2>/dev/null | grep -v pgrep || true")
 		if strings.TrimSpace(runningProcs) != "" {
 			result += "Found running processes:\n" + runningProcs + "\n"
 			result += "Stopping AI coding tool processes...\n"
 			rootExec("pkill -f 'opencode serve' 2>/dev/null || true")
 			rootExec("pkill -f 'nanocode serve' 2>/dev/null || true")
-			rootExec("pkill -f 'openhands serve' 2>/dev/null || true")
+			rootExec("pkill -f 'shelley serve' 2>/dev/null || true")
 			result += "✅ Processes stopped\n"
 		} else {
 			result += "No running processes found\n"
@@ -2639,14 +2702,14 @@ func updateToolsCmd(containerName, containerUser string) tea.Cmd {
 			v, _ := userExec("~/.bun/bin/nanocode --version 2>/dev/null || echo 'not installed'")
 			return v
 		}())
-		currentOpenhands := strings.TrimSpace(func() string {
-			v, _ := userExec("timeout 8 ~/.local/bin/openhands --version 2>/dev/null | grep -oE '[0-9]+\\.[0-9]+\\.[0-9]+' | head -1 || ~/.local/bin/uv tool list 2>/dev/null | grep '^openhands ' | awk '{print $2}' || echo 'not installed'")
+		currentShelley := strings.TrimSpace(func() string {
+			v, _ := rootExec("/usr/local/bin/shelley version 2>/dev/null | grep '\"version\"' | cut -d'\"' -f4 || echo 'not installed'")
 			return v
 		}())
 		
 		result += fmt.Sprintf("  Current opencode:  %s\n", currentOpencode)
 		result += fmt.Sprintf("  Current nanocode:  %s\n", currentNanocode)
-		result += fmt.Sprintf("  Current openhands: %s\n", currentOpenhands)
+		result += fmt.Sprintf("  Current shelley:   %s\n", currentShelley)
 
 		// Step 3: Check latest available versions
 		result += "\nChecking latest available versions...\n"
@@ -2681,27 +2744,19 @@ func updateToolsCmd(containerName, containerUser string) tea.Cmd {
 			}
 		}
 
-		// Get latest openhands version from PyPI API
-		// Try jq first, then fall back to grep parsing
-		latestOpenhands := ""
-		if out, err := exec.Command("bash", "-c", "curl -s https://pypi.org/pypi/openhands/json | jq -r '.info.version // empty' 2>/dev/null").Output(); err == nil && len(strings.TrimSpace(string(out))) > 0 {
-			latestOpenhands = strings.TrimSpace(string(out))
-		} else {
-			// Fallback: use grep to extract version (works without jq)
-			if out, err := exec.Command("bash", "-c", `curl -s https://pypi.org/pypi/openhands/json | grep -o '"version": *"[^"]*"' | head -1 | grep -o '[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*'`).Output(); err == nil {
-				latestOpenhands = strings.TrimSpace(string(out))
-			}
-		}
+		// Get latest Shelley version from GitHub releases
+		latestShelleyOut, _ := exec.Command("bash", "-c", "curl -sI https://github.com/boldsoftware/shelley/releases/latest 2>/dev/null | grep -i '^location:' | sed 's|.*/v||' | tr -d '\\r\\n'").Output()
+		latestShelley := strings.TrimSpace(string(latestShelleyOut))
 		
 		result += fmt.Sprintf("  Latest opencode:  %s\n", latestOpencode)
 		result += fmt.Sprintf("  Latest nanocode:  %s\n", latestNanocode)
-		result += fmt.Sprintf("  Latest openhands: %s\n", latestOpenhands)
+		result += fmt.Sprintf("  Latest shelley:   %s\n", latestShelley)
 
 		opencodeNeedsUpdate := latestOpencode != "" && currentOpencode != latestOpencode && currentOpencode != "not installed"
 		nanocodeNeedsUpdate := latestNanocode != "" && currentNanocode != latestNanocode && currentNanocode != "not installed"
-		openhandsNeedsUpdate := latestOpenhands != "" && currentOpenhands != latestOpenhands && currentOpenhands != "not installed"
+		shelleyNeedsUpdate := latestShelley != "" && currentShelley != latestShelley && currentShelley != "not installed"
 		
-		var opencodeErr, nanocodeErr, openhandsErr error
+		var opencodeErr, nanocodeErr, shelleyErr error
 
 		// Step 4: Update opencode if needed
 		if opencodeNeedsUpdate {
@@ -2753,38 +2808,38 @@ func updateToolsCmd(containerName, containerUser string) tea.Cmd {
 			result += fmt.Sprintf("\n✅ nanocode is already up to date (%s)\n", currentNanocode)
 		}
 
-		// Step 6: Update openhands if needed
-		if openhandsNeedsUpdate {
-			result += fmt.Sprintf("\nUpdating openhands (%s -> %s)...\n", currentOpenhands, latestOpenhands)
-			openhandsOut, err := userExec("~/.local/bin/uv tool uninstall openhands 2>/dev/null; ~/.local/bin/uv tool install --python 3.12 openhands && timeout 5 ~/.local/bin/openhands --version")
-			result += openhandsOut
-			openhandsErr = err
+		// Step 6: Update shelley if needed
+		if shelleyNeedsUpdate {
+			result += fmt.Sprintf("\nUpdating shelley (%s -> %s)...\n", currentShelley, latestShelley)
+			shelleyOut, err := rootExec(`curl -Lo /usr/local/bin/shelley "https://github.com/boldsoftware/shelley/releases/latest/download/shelley_linux_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')" && chmod +x /usr/local/bin/shelley && /usr/local/bin/shelley version | grep '"version"' | cut -d'"' -f4`)
+			result += shelleyOut
+			shelleyErr = err
 			if err != nil {
-				result += fmt.Sprintf("Warning: openhands update had issues: %v\n", err)
+				result += fmt.Sprintf("Warning: shelley update had issues: %v\n", err)
 			} else {
-				result += "✅ openhands updated\n"
+				result += "✅ shelley updated\n"
 			}
-		} else if currentOpenhands == "not installed" {
-			result += "\nInstalling openhands...\n"
-			openhandsOut, err := userExec("~/.local/bin/uv tool install --python 3.12 openhands && timeout 5 ~/.local/bin/openhands --version")
-			result += openhandsOut
-			openhandsErr = err
+		} else if currentShelley == "not installed" {
+			result += "\nInstalling shelley...\n"
+			shelleyOut, err := rootExec(`curl -Lo /usr/local/bin/shelley "https://github.com/boldsoftware/shelley/releases/latest/download/shelley_linux_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')" && chmod +x /usr/local/bin/shelley && /usr/local/bin/shelley version | grep '"version"' | cut -d'"' -f4`)
+			result += shelleyOut
+			shelleyErr = err
 			if err != nil {
-				result += fmt.Sprintf("Warning: openhands install had issues: %v\n", err)
+				result += fmt.Sprintf("Warning: shelley install had issues: %v\n", err)
 			} else {
-				result += "✅ openhands installed\n"
+				result += "✅ shelley installed\n"
 			}
 		} else {
-			result += fmt.Sprintf("\n✅ openhands is already up to date (%s)\n", currentOpenhands)
+			result += fmt.Sprintf("\n✅ shelley is already up to date (%s)\n", currentShelley)
 		}
 
-		if opencodeErr != nil || nanocodeErr != nil || openhandsErr != nil {
+		if opencodeErr != nil || nanocodeErr != nil || shelleyErr != nil {
 			result += "\n⚠️ Update completed with some warnings"
 			return toolsUpdateMsg{output: result, success: false}
 		}
 
-		if !opencodeNeedsUpdate && !nanocodeNeedsUpdate && !openhandsNeedsUpdate && 
-		   currentOpencode != "not installed" && currentNanocode != "not installed" && currentOpenhands != "not installed" {
+		if !opencodeNeedsUpdate && !nanocodeNeedsUpdate && !shelleyNeedsUpdate && 
+		   currentOpencode != "not installed" && currentNanocode != "not installed" && currentShelley != "not installed" {
 			result += "\n✅ All tools are already up to date!"
 		} else {
 			result += "\n✅ Update check complete!"
