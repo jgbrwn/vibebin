@@ -2160,6 +2160,12 @@ npm install --silent 2>&1 | tail -3
 npm run build 2>&1 | tail -3
 cd ..
 
+echo "Building templates..."
+for dir in templates/*/; do
+    name=$(basename "$dir")
+    tar -czf "templates/$name.tar.gz" -C "templates/$name" --exclude='.DS_Store' .
+done
+
 echo "Building Shelley binary..."
 /usr/local/go/bin/go build -o /usr/local/bin/shelley ./cmd/shelley 2>&1
 chmod 755 /usr/local/bin/shelley
@@ -2508,6 +2514,8 @@ func handleUpdate(w http.ResponseWriter, r *http.Request) {
 		"sed -i 's|// Get hostname (add .exe.xyz suffix if no dots, matching system_prompt.go)|// Get hostname - check SHELLEY_DOMAIN env var first\\n\\tif envDomain := os.Getenv(\"SHELLEY_DOMAIN\"); envDomain != \"\" {\\n\\t\\thostname = envDomain\\n\\t} else // Get hostname (add .exe.xyz suffix if no dots, matching system_prompt.go)|' server/handlers.go\n" +
 		"echo \"Building UI...\"\n" +
 		"cd ui && npm install --silent 2>&1 | tail -1 && npm run build 2>&1 | tail -1 && cd ..\n" +
+		"echo \"Building templates...\"\n" +
+		"for dir in templates/*/; do name=$(basename \"$dir\"); tar -czf \"templates/$name.tar.gz\" -C \"templates/$name\" --exclude='.DS_Store' .; done\n" +
 		"echo \"Building binary...\"\n" +
 		"sudo /usr/local/go/bin/go build -o /usr/local/bin/shelley ./cmd/shelley 2>&1\n" +
 		"sudo chmod 755 /usr/local/bin/shelley\n" +
@@ -2955,6 +2963,8 @@ sed -i 's|// Get hostname for exe.dev|// Get hostname - check SHELLEY_DOMAIN env
 sed -i 's|// Get hostname (add .exe.xyz suffix if no dots, matching system_prompt.go)|// Get hostname - check SHELLEY_DOMAIN env var first\n\tif envDomain := os.Getenv("SHELLEY_DOMAIN"); envDomain != "" {\n\t\thostname = envDomain\n\t} else // Get hostname (add .exe.xyz suffix if no dots, matching system_prompt.go)|' server/handlers.go
 echo "Building UI..."
 cd ui && npm install --silent 2>&1 | tail -2 && npm run build 2>&1 | tail -2 && cd ..
+echo "Building templates..."
+for dir in templates/*/; do name=$(basename "$dir"); tar -czf "templates/$name.tar.gz" -C "templates/$name" --exclude='.DS_Store' .; done
 echo "Building Shelley binary..."
 /usr/local/go/bin/go build -o /usr/local/bin/shelley ./cmd/shelley 2>&1
 chmod 755 /usr/local/bin/shelley
