@@ -2132,10 +2132,24 @@ echo "Node.js $(node --version) installed successfully"
 
 	// STEP 10b: Install Shelley Web Agent
 	sendProgress("Installing Shelley Web Agent...")
-	if err := rootExec(`curl -Lo /usr/local/bin/shelley "https://github.com/boldsoftware/shelley/releases/latest/download/shelley_linux_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')" && chmod +x /usr/local/bin/shelley`); err != nil {
-		sendProgress(fmt.Sprintf("Warning: Shelley installation failed: %v", err))
+	shelleyInstallCmd := exec.Command("incus", "exec", containerName, "--", "bash", "-c",
+		`curl -fsSL -o /usr/local/bin/shelley "https://github.com/boldsoftware/shelley/releases/latest/download/shelley_linux_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')" && chmod +x /usr/local/bin/shelley`)
+	if out, err := shelleyInstallCmd.CombinedOutput(); err != nil {
+		sendProgress(fmt.Sprintf("Warning: Shelley installation failed: %v - %s", err, string(out)))
 	} else {
-		sendProgress("✅ Shelley installed")
+		// Verify installation
+		verifyCmd := exec.Command("incus", "exec", containerName, "--", "/usr/local/bin/shelley", "version")
+		if verifyOut, verifyErr := verifyCmd.CombinedOutput(); verifyErr != nil {
+			sendProgress(fmt.Sprintf("Warning: Shelley installed but verification failed: %v", verifyErr))
+		} else {
+			// Extract version from JSON output
+			verifyStr := string(verifyOut)
+			if strings.Contains(verifyStr, "version") {
+				sendProgress("✅ Shelley installed and verified")
+			} else {
+				sendProgress("✅ Shelley installed")
+			}
+		}
 	}
 
 	// Create start-shelley.sh wrapper script
@@ -2159,8 +2173,13 @@ exec /usr/local/bin/shelley serve -port 9999
 	tmpStartShelley.Close()
 	exec.Command("incus", "file", "push", tmpStartShelley.Name(), containerName+"/usr/local/bin/start-shelley.sh").Run()
 	os.Remove(tmpStartShelley.Name())
-	rootExec("chmod +x /usr/local/bin/start-shelley.sh")
-	sendProgress("✅ start-shelley.sh wrapper created")
+	rootExec("chmod", "+x", "/usr/local/bin/start-shelley.sh")
+	// Verify start-shelley.sh is executable
+	if err := rootExec("test", "-x", "/usr/local/bin/start-shelley.sh"); err != nil {
+		sendProgress("Warning: start-shelley.sh may not be executable")
+	} else {
+		sendProgress("✅ start-shelley.sh wrapper created")
+	}
 
 	// Create .shelley_env template file for the user
 	shelleyEnvTemplate := `# Shelley Web Agent API Keys
@@ -2188,8 +2207,16 @@ FIREWORKS_API_KEY=
 	tmpShelleyEnv.Close()
 	exec.Command("incus", "file", "push", tmpShelleyEnv.Name(), containerName+fmt.Sprintf("/home/%s/.shelley_env", containerUser)).Run()
 	os.Remove(tmpShelleyEnv.Name())
-	userExec("chmod 600 ~/.shelley_env")
-	sendProgress("✅ .shelley_env template created")
+	// Fix ownership and permissions of .shelley_env
+	rootExec("chown", fmt.Sprintf("%s:%s", containerUser, containerUser), fmt.Sprintf("/home/%s/.shelley_env", containerUser))
+	rootExec("chmod", "600", fmt.Sprintf("/home/%s/.shelley_env", containerUser))
+	// Verify .shelley_env ownership
+	checkCmd := exec.Command("incus", "exec", containerName, "--", "stat", "-c", "%U", fmt.Sprintf("/home/%s/.shelley_env", containerUser))
+	if ownerOut, _ := checkCmd.Output(); strings.TrimSpace(string(ownerOut)) == containerUser {
+		sendProgress("✅ .shelley_env template created")
+	} else {
+		sendProgress("Warning: .shelley_env created but ownership may be incorrect")
+	}
 
 	// STEP 10c: Create project directories for AI coding tools
 	sendProgress("Creating project directory...")
@@ -2413,19 +2440,37 @@ func handleUpdate(w http.ResponseWriter, r *http.Request) {
 	latestShelleyStr := strings.TrimSpace(string(latestShelley))
 	currentShelleyStr := strings.TrimSpace(string(currentShelley))
 	send(fmt.Sprintf("\n📦 [3/3] Updating Shelley (current: %s, latest: %s)...", currentShelleyStr, latestShelleyStr))
-	shelleyUpdateCmd := "sudo curl -Lo /usr/local/bin/shelley \"https://github.com/boldsoftware/shelley/releases/latest/download/shelley_linux_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')\" && sudo chmod +x /usr/local/bin/shelley 2>&1"
+	shelleyUpdateCmd := "sudo curl -fsSL -o /usr/local/bin/shelley \"https://github.com/boldsoftware/shelley/releases/latest/download/shelley_linux_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')\" && sudo chmod +x /usr/local/bin/shelley"
 	if latestShelleyStr != "" && currentShelleyStr != latestShelleyStr && currentShelleyStr != "not installed" {
-		send("Running: curl -Lo /usr/local/bin/shelley ...")
-		out, _ = exec.Command("bash", "-c", shelleyUpdateCmd).CombinedOutput()
-		if len(strings.TrimSpace(string(out))) > 0 { send(string(out)) }
-		send("✅ Shelley updated\n")
+		send("Running: curl -fsSL -o /usr/local/bin/shelley ...")
+		out, err := exec.Command("bash", "-c", shelleyUpdateCmd).CombinedOutput()
+		if err != nil {
+			send(fmt.Sprintf("Error: %v - %s", err, string(out)))
+		} else {
+			// Verify update
+			verify, _ := exec.Command("bash", "-c", "/usr/local/bin/shelley version 2>/dev/null | grep '\"version\"' | cut -d'\"' -f4").Output()
+			if len(strings.TrimSpace(string(verify))) > 0 {
+				send(fmt.Sprintf("✅ Shelley updated to %s\n", strings.TrimSpace(string(verify))))
+			} else {
+				send("✅ Shelley updated\n")
+			}
+		}
 	} else if currentShelleyStr == latestShelleyStr {
 		send("Already at latest version\n")
 	} else {
 		send("Installing Shelley...")
-		out, _ = exec.Command("bash", "-c", shelleyUpdateCmd).CombinedOutput()
-		if len(strings.TrimSpace(string(out))) > 0 { send(string(out)) }
-		send("✅ Shelley installed\n")
+		out, err := exec.Command("bash", "-c", shelleyUpdateCmd).CombinedOutput()
+		if err != nil {
+			send(fmt.Sprintf("Error: %v - %s", err, string(out)))
+		} else {
+			// Verify installation
+			verify, _ := exec.Command("bash", "-c", "/usr/local/bin/shelley version 2>/dev/null | grep '\"version\"' | cut -d'\"' -f4").Output()
+			if len(strings.TrimSpace(string(verify))) > 0 {
+				send(fmt.Sprintf("✅ Shelley installed (version %s)\n", strings.TrimSpace(string(verify))))
+			} else {
+				send("✅ Shelley installed\n")
+			}
+		}
 	}
 	send("\n🎉 All updates complete!"); send("DONE")
 }
@@ -2809,25 +2854,36 @@ func updateToolsCmd(containerName, containerUser string) tea.Cmd {
 		}
 
 		// Step 6: Update shelley if needed
+		shelleyInstallCmd := `curl -fsSL -o /usr/local/bin/shelley "https://github.com/boldsoftware/shelley/releases/latest/download/shelley_linux_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')" && chmod +x /usr/local/bin/shelley`
 		if shelleyNeedsUpdate {
 			result += fmt.Sprintf("\nUpdating shelley (%s -> %s)...\n", currentShelley, latestShelley)
-			shelleyOut, err := rootExec(`curl -Lo /usr/local/bin/shelley "https://github.com/boldsoftware/shelley/releases/latest/download/shelley_linux_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')" && chmod +x /usr/local/bin/shelley && /usr/local/bin/shelley version | grep '"version"' | cut -d'"' -f4`)
-			result += shelleyOut
-			shelleyErr = err
+			shelleyOut, err := rootExec(shelleyInstallCmd)
 			if err != nil {
-				result += fmt.Sprintf("Warning: shelley update had issues: %v\n", err)
+				result += fmt.Sprintf("Warning: shelley update had issues: %v\n%s", err, shelleyOut)
+				shelleyErr = err
 			} else {
-				result += "✅ shelley updated\n"
+				// Verify installation
+				verifyOut, _ := rootExec("/usr/local/bin/shelley version 2>/dev/null | grep '\"version\"' | cut -d'\"' -f4")
+				if v := strings.TrimSpace(verifyOut); v != "" {
+					result += fmt.Sprintf("✅ shelley updated to %s\n", v)
+				} else {
+					result += "✅ shelley updated\n"
+				}
 			}
 		} else if currentShelley == "not installed" {
 			result += "\nInstalling shelley...\n"
-			shelleyOut, err := rootExec(`curl -Lo /usr/local/bin/shelley "https://github.com/boldsoftware/shelley/releases/latest/download/shelley_linux_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')" && chmod +x /usr/local/bin/shelley && /usr/local/bin/shelley version | grep '"version"' | cut -d'"' -f4`)
-			result += shelleyOut
-			shelleyErr = err
+			shelleyOut, err := rootExec(shelleyInstallCmd)
 			if err != nil {
-				result += fmt.Sprintf("Warning: shelley install had issues: %v\n", err)
+				result += fmt.Sprintf("Warning: shelley install had issues: %v\n%s", err, shelleyOut)
+				shelleyErr = err
 			} else {
-				result += "✅ shelley installed\n"
+				// Verify installation
+				verifyOut, _ := rootExec("/usr/local/bin/shelley version 2>/dev/null | grep '\"version\"' | cut -d'\"' -f4")
+				if v := strings.TrimSpace(verifyOut); v != "" {
+					result += fmt.Sprintf("✅ shelley installed (version %s)\n", v)
+				} else {
+					result += "✅ shelley installed\n"
+				}
 			}
 		} else {
 			result += fmt.Sprintf("\n✅ shelley is already up to date (%s)\n", currentShelley)
