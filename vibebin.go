@@ -2124,11 +2124,21 @@ echo "Node.js $(node --version) installed successfully"
 
 	// STEP 10: Install nanocode (requires bun to be in PATH)
 	sendProgress("Installing nanocode...")
-	if err := userExec("export PATH=$PATH:$HOME/.bun/bin && bun i -g nanocode@latest"); err != nil {
+	if err := userExec("export PATH=$PATH:$HOME/.bun/bin && bun add -g nanocode@latest"); err != nil {
 		sendProgress(fmt.Sprintf("Warning: nanocode installation failed: %v", err))
 	} else {
 		sendProgress("✅ nanocode installed")
 	}
+
+	// STEP 10a: Install Claude Code
+	sendProgress("Installing Claude Code...")
+	if err := userExec("curl -fsSL https://claude.ai/install.sh | bash"); err != nil {
+		sendProgress(fmt.Sprintf("Warning: Claude Code installation failed: %v", err))
+	} else {
+		sendProgress("✅ Claude Code installed")
+	}
+	// Add claude to PATH
+	userExec("grep -q '.claude/local' ~/.bashrc || echo 'export PATH=$PATH:$HOME/.claude/local' >> ~/.bashrc")
 
 	// STEP 10b: Build and Install Shelley Web Agent from source (with domain patch)
 	sendProgress("Building Shelley Web Agent from source...")
@@ -2356,6 +2366,7 @@ FIREWORKS_API_KEY=your-key-here
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"html/template"
@@ -2368,6 +2379,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -2396,6 +2408,7 @@ type AppState struct {
 }
 
 var state = &AppState{}
+var updateCancelled int32 // atomic flag for cancelling updates
 
 func main() {
 	currentUser, _ := user.Current()
@@ -2413,6 +2426,7 @@ func main() {
 	http.HandleFunc("/api/toggle", handleToggle)
 	http.HandleFunc("/api/logs", handleLogs)
 	http.HandleFunc("/api/update", handleUpdate)
+	http.HandleFunc("/api/stop-update", handleStopUpdate)
 	http.HandleFunc("/api/dns-check", handleDNSCheck)
 	fmt.Printf("Admin app on port %d, domain: %s\n", AdminPort, state.domain)
 	http.ListenAndServe(fmt.Sprintf(":%d", AdminPort), nil)
@@ -2524,11 +2538,25 @@ func handleLogs(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{"lines": lines})
 }
 
+// handleStopUpdate handles the stop update request
+func handleStopUpdate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" { http.Error(w, "Method not allowed", 405); return }
+	atomic.StoreInt32(&updateCancelled, 1)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]bool{"stopped": true})
+}
+
 func handleUpdate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" { http.Error(w, "Method not allowed", 405); return }
 	w.Header().Set("Content-Type", "text/event-stream"); w.Header().Set("Cache-Control", "no-cache")
 	flusher, _ := w.(http.Flusher)
 	send := func(m string) { fmt.Fprintf(w, "data: %s\n\n", m); flusher.Flush() }
+	
+	// Reset cancellation flag
+	atomic.StoreInt32(&updateCancelled, 0)
+	
+	// Helper to check if cancelled
+	isCancelled := func() bool { return atomic.LoadInt32(&updateCancelled) == 1 }
 	
 	// Step 1: Stop running processes
 	send("Checking for running processes...")
@@ -2544,69 +2572,126 @@ func handleUpdate(w http.ResponseWriter, r *http.Request) {
 	time.Sleep(time.Second)
 	send("✅ Processes stopped\n")
 	
+	if isCancelled() { send("\n⚠️ Update cancelled by user"); send("DONE"); return }
+	
 	// Step 2: Check current versions
 	send("Checking current versions...")
 	currentOpencode := strings.TrimSpace(string(func() []byte { out, _ := exec.Command("bash", "-c", "$HOME/.opencode/bin/opencode --version 2>/dev/null || echo 'not installed'").Output(); return out }()))
 	currentNanocode := strings.TrimSpace(string(func() []byte { out, _ := exec.Command("bash", "-c", "$HOME/.bun/bin/nanocode --version 2>/dev/null || echo 'not installed'").Output(); return out }()))
 	currentShelleyCommit := strings.TrimSpace(string(func() []byte { out, _ := exec.Command("bash", "-c", "/usr/local/bin/shelley version 2>/dev/null | grep '\"commit\"' | cut -d'\"' -f4 || echo 'not installed'").Output(); return out }()))
+	currentClaudeCode := strings.TrimSpace(string(func() []byte { out, _ := exec.Command("bash", "-c", "$HOME/.claude/local/claude --version 2>/dev/null | head -1 || echo 'not installed'").Output(); return out }()))
 	currentShelleyDisplay := currentShelleyCommit
 	if len(currentShelleyDisplay) > 7 { currentShelleyDisplay = currentShelleyDisplay[:7] }
-	send(fmt.Sprintf("  Current opencode:  %s", currentOpencode))
-	send(fmt.Sprintf("  Current nanocode:  %s", currentNanocode))
-	send(fmt.Sprintf("  Current shelley:   %s\n", currentShelleyDisplay))
+	send(fmt.Sprintf("  Current opencode:    %s", currentOpencode))
+	send(fmt.Sprintf("  Current nanocode:    %s", currentNanocode))
+	send(fmt.Sprintf("  Current claude-code: %s", currentClaudeCode))
+	send(fmt.Sprintf("  Current shelley:     %s\n", currentShelleyDisplay))
+	
+	if isCancelled() { send("\n⚠️ Update cancelled by user"); send("DONE"); return }
 	
 	// Step 3: Check latest available versions
 	send("Checking latest available versions...")
 	latestOpencode := strings.TrimSpace(string(func() []byte { out, _ := exec.Command("bash", "-c", "curl -s https://api.github.com/repos/anomalyco/opencode/releases/latest 2>/dev/null | grep -o '\"tag_name\": *\"[^\"]*\"' | head -1 | sed 's/\"tag_name\": *\"//' | sed 's/\"$//' | sed 's/^v//'").Output(); return out }()))
 	latestNanocode := strings.TrimSpace(string(func() []byte { out, _ := exec.Command("bash", "-c", "curl -s https://api.github.com/repos/nanogpt-community/nanocode/releases/latest 2>/dev/null | grep -o '\"tag_name\": *\"[^\"]*\"' | head -1 | sed 's/\"tag_name\": *\"//' | sed 's/\"$//' | sed 's/^v//'").Output(); return out }()))
+	latestClaudeCode := strings.TrimSpace(string(func() []byte { out, _ := exec.Command("bash", "-c", "curl -s https://api.github.com/repos/anthropics/claude-code/releases/latest 2>/dev/null | grep -o '\"tag_name\": *\"[^\"]*\"' | head -1 | sed 's/\"tag_name\": *\"//' | sed 's/\"$//' | sed 's/^v//'").Output(); return out }()))
 	latestShelleyCommit := strings.TrimSpace(string(func() []byte { out, _ := exec.Command("bash", "-c", "curl -s https://api.github.com/repos/boldsoftware/shelley/commits/main | grep '\"sha\"' | head -1 | cut -d'\"' -f4").Output(); return out }()))
 	latestShelleyDisplay := latestShelleyCommit
 	if len(latestShelleyDisplay) > 7 { latestShelleyDisplay = latestShelleyDisplay[:7] }
-	send(fmt.Sprintf("  Latest opencode:   %s", latestOpencode))
-	send(fmt.Sprintf("  Latest nanocode:   %s", latestNanocode))
-	send(fmt.Sprintf("  Latest shelley:    %s\n", latestShelleyDisplay))
+	send(fmt.Sprintf("  Latest opencode:     %s", latestOpencode))
+	send(fmt.Sprintf("  Latest nanocode:     %s", latestNanocode))
+	send(fmt.Sprintf("  Latest claude-code:  %s", latestClaudeCode))
+	send(fmt.Sprintf("  Latest shelley:      %s\n", latestShelleyDisplay))
 	
 	// Determine what needs updating
 	opencodeNeedsUpdate := latestOpencode != "" && currentOpencode != latestOpencode && currentOpencode != "not installed"
 	nanocodeNeedsUpdate := latestNanocode != "" && currentNanocode != latestNanocode && currentNanocode != "not installed"
+	claudeCodeNeedsUpdate := latestClaudeCode != "" && currentClaudeCode != latestClaudeCode && currentClaudeCode != "not installed"
 	shelleyNeedsUpdate := latestShelleyCommit != "" && currentShelleyCommit != latestShelleyCommit && currentShelleyCommit != "not installed"
 	
+	if isCancelled() { send("\n⚠️ Update cancelled by user"); send("DONE"); return }
+	
 	// Step 4: Update opencode
-	send("📦 [1/3] OpenCode")
+	send("📦 [1/4] OpenCode")
 	if opencodeNeedsUpdate {
 		send(fmt.Sprintf("Updating opencode (%s -> %s)...", currentOpencode, latestOpencode))
-		out, _ := exec.Command("bash", "-c", "curl -fsSL https://opencode.ai/install 2>/dev/null | bash 2>&1 | tail -3").CombinedOutput()
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		cmd := exec.CommandContext(ctx, "bash", "-c", "curl -fsSL https://opencode.ai/install 2>/dev/null | bash 2>&1 | tail -3")
+		out, _ := cmd.CombinedOutput()
+		cancel()
 		if len(strings.TrimSpace(string(out))) > 0 { send(strings.TrimSpace(string(out))) }
 		newVer, _ := exec.Command("bash", "-c", "$HOME/.opencode/bin/opencode --version 2>/dev/null").Output()
 		send(fmt.Sprintf("✅ opencode updated to %s\n", strings.TrimSpace(string(newVer))))
 	} else if currentOpencode == "not installed" {
 		send("Installing opencode...")
-		out, _ := exec.Command("bash", "-c", "curl -fsSL https://opencode.ai/install 2>/dev/null | bash 2>&1 | tail -3").CombinedOutput()
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		cmd := exec.CommandContext(ctx, "bash", "-c", "curl -fsSL https://opencode.ai/install 2>/dev/null | bash 2>&1 | tail -3")
+		out, _ := cmd.CombinedOutput()
+		cancel()
 		if len(strings.TrimSpace(string(out))) > 0 { send(strings.TrimSpace(string(out))) }
 		send("✅ opencode installed\n")
 	} else {
 		send(fmt.Sprintf("✅ opencode is already up to date (%s)\n", currentOpencode))
 	}
 	
+	if isCancelled() { send("\n⚠️ Update cancelled by user"); send("DONE"); return }
+	
 	// Step 5: Update nanocode
-	send("📦 [2/3] NanoCode")
+	send("📦 [2/4] NanoCode")
 	if nanocodeNeedsUpdate {
 		send(fmt.Sprintf("Updating nanocode (%s -> %s)...", currentNanocode, latestNanocode))
-		out, _ := exec.Command("bash", "-c", "export PATH=$PATH:$HOME/.bun/bin && bun i -g nanocode@latest 2>&1 | tail -3").CombinedOutput()
-		if len(strings.TrimSpace(string(out))) > 0 { send(strings.TrimSpace(string(out))) }
-		newVer, _ := exec.Command("bash", "-c", "$HOME/.bun/bin/nanocode --version 2>/dev/null").Output()
-		send(fmt.Sprintf("✅ nanocode updated to %s\n", strings.TrimSpace(string(newVer))))
+		// Use timeout and remove the old package first to avoid hanging
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		cmd := exec.CommandContext(ctx, "bash", "-c", "export PATH=$PATH:$HOME/.bun/bin && bun remove -g nanocode 2>/dev/null; bun add -g nanocode@latest 2>&1 | tail -3")
+		out, err := cmd.CombinedOutput()
+		cancel()
+		if err != nil && strings.Contains(err.Error(), "killed") {
+			send("⚠️ nanocode update timed out")
+		} else {
+			if len(strings.TrimSpace(string(out))) > 0 { send(strings.TrimSpace(string(out))) }
+			newVer, _ := exec.Command("bash", "-c", "$HOME/.bun/bin/nanocode --version 2>/dev/null").Output()
+			send(fmt.Sprintf("✅ nanocode updated to %s\n", strings.TrimSpace(string(newVer))))
+		}
 	} else if currentNanocode == "not installed" {
 		send("Installing nanocode...")
-		out, _ := exec.Command("bash", "-c", "export PATH=$PATH:$HOME/.bun/bin && bun i -g nanocode@latest 2>&1 | tail -3").CombinedOutput()
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		cmd := exec.CommandContext(ctx, "bash", "-c", "export PATH=$PATH:$HOME/.bun/bin && bun add -g nanocode@latest 2>&1 | tail -3")
+		out, _ := cmd.CombinedOutput()
+		cancel()
 		if len(strings.TrimSpace(string(out))) > 0 { send(strings.TrimSpace(string(out))) }
 		send("✅ nanocode installed\n")
 	} else {
 		send(fmt.Sprintf("✅ nanocode is already up to date (%s)\n", currentNanocode))
 	}
 	
-	// Step 6: Update Shelley
-	send("📦 [3/3] Shelley")
+	if isCancelled() { send("\n⚠️ Update cancelled by user"); send("DONE"); return }
+	
+	// Step 6: Update Claude Code
+	send("📦 [3/4] Claude Code")
+	if claudeCodeNeedsUpdate {
+		send(fmt.Sprintf("Updating claude-code (%s -> %s)...", currentClaudeCode, latestClaudeCode))
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		cmd := exec.CommandContext(ctx, "bash", "-c", "curl -fsSL https://claude.ai/install.sh 2>/dev/null | bash 2>&1 | tail -3")
+		out, _ := cmd.CombinedOutput()
+		cancel()
+		if len(strings.TrimSpace(string(out))) > 0 { send(strings.TrimSpace(string(out))) }
+		newVer, _ := exec.Command("bash", "-c", "$HOME/.claude/local/claude --version 2>/dev/null | head -1").Output()
+		send(fmt.Sprintf("✅ claude-code updated to %s\n", strings.TrimSpace(string(newVer))))
+	} else if currentClaudeCode == "not installed" {
+		send("Installing claude-code...")
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		cmd := exec.CommandContext(ctx, "bash", "-c", "curl -fsSL https://claude.ai/install.sh 2>/dev/null | bash 2>&1 | tail -3")
+		out, _ := cmd.CombinedOutput()
+		cancel()
+		if len(strings.TrimSpace(string(out))) > 0 { send(strings.TrimSpace(string(out))) }
+		send("✅ claude-code installed\n")
+	} else {
+		send(fmt.Sprintf("✅ claude-code is already up to date (%s)\n", currentClaudeCode))
+	}
+	
+	if isCancelled() { send("\n⚠️ Update cancelled by user"); send("DONE"); return }
+	
+	// Step 7: Update Shelley
+	send("📦 [4/4] Shelley")
 	
 	// Get SHELLEY_DOMAIN from .shelley_env
 	domainBytes, _ := exec.Command("bash", "-c", "grep '^SHELLEY_DOMAIN=' ~/.shelley_env 2>/dev/null | cut -d'=' -f2 || echo ''").Output()
@@ -2687,8 +2772,9 @@ func handleUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	
 	// Summary
-	if !opencodeNeedsUpdate && !nanocodeNeedsUpdate && !shelleyNeedsUpdate &&
-	   currentOpencode != "not installed" && currentNanocode != "not installed" && currentShelleyCommit != "not installed" {
+	if !opencodeNeedsUpdate && !nanocodeNeedsUpdate && !claudeCodeNeedsUpdate && !shelleyNeedsUpdate &&
+	   currentOpencode != "not installed" && currentNanocode != "not installed" && 
+	   currentClaudeCode != "not installed" && currentShelleyCommit != "not installed" {
 		send("\n✅ All tools are already up to date!")
 	} else {
 		send("\n🎉 Update complete!")
@@ -2711,16 +2797,17 @@ var indexHTML = ` + "`" + `<!DOCTYPE html>
 <div class="mt"><div class="tc"><button class="tb active" data-v="manage">MANAGE</button><button class="tb" data-v="update">UPDATE</button></div></div>
 <section id="manage-section" class="sec active"><div id="tools"><div class="card" data-t="opencode"><div class="ti"><div class="icon">🔷</div><div><div class="tn">OpenCode</div><div class="ts" id="st-opencode">Stopped</div></div></div><label class="sw"><input type="checkbox" id="tg-opencode" onchange="tog('opencode',this.checked)"><span class="sl"></span></label></div>
 <div class="card" data-t="nanocode"><div class="ti"><div class="icon">🟣</div><div><div class="tn">NanoCode</div><div class="ts" id="st-nanocode">Stopped</div></div></div><label class="sw"><input type="checkbox" id="tg-nanocode" onchange="tog('nanocode',this.checked)"><span class="sl"></span></label></div>
-<div class="card" data-t="shelley"><div class="ti"><div class="icon">🐚</div><div><div class="tn">Shelley</div><div class="ts" id="st-shelley">Stopped</div></div></div><label class="sw"><input type="checkbox" id="tg-shelley" onchange="tog('shelley',this.checked)"><span class="sl"></span></label></div></div>
+<div class="card" data-t="shelley"><div class="ti"><div class="icon" style="padding:0"><img src="data:image/png;base64,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" width="40" height="40" style="border-radius:10px"></div><div><div class="tn">Shelley</div><div class="ts" id="st-shelley">Stopped</div></div></div><label class="sw"><input type="checkbox" id="tg-shelley" onchange="tog('shelley',this.checked)"><span class="sl"></span></label></div></div>
 <div class="ls"><div class="lh"><span class="lt">📋 Tool Output Log</span></div><div class="lv" id="log"><div class="ll">No logs yet.</div></div></div></section>
-<section id="update-section" class="sec"><div class="uw"><h3>⚠️ Before updating</h3><ul><li>Toggle off all tools in MANAGE</li><li>No AI tools running in CLI</li><li>Update stops running processes</li><li>Updates OpenCode, NanoCode, Shelley</li></ul></div><button class="ub" id="ubtn" onclick="upd()">🚀 Update All Tools</button><div class="up" id="uprog"><div class="lv" id="ulog"></div></div></section>
+<section id="update-section" class="sec"><div class="uw"><h3>⚠️ Before updating</h3><ul><li>Toggle off all tools in MANAGE</li><li>No AI tools running in CLI</li><li>Update stops running processes</li><li>Updates OpenCode, NanoCode, Claude Code, Shelley</li></ul></div><div style="display:flex;gap:1rem;justify-content:center"><button class="ub" id="ubtn" onclick="upd()">🚀 Update All Tools</button><button class="ub" id="sbtn" onclick="stopUpd()" style="background:var(--err);display:none">⛔ Stop Update</button></div><div class="up" id="uprog"><div class="lv" id="ulog"></div></div></section>
 <footer>Powered by <a href="https://github.com/jgbrwn/vibebin">vibebin</a></footer></div>
 <script>let updating=false;document.querySelectorAll('.tb').forEach(b=>b.onclick=()=>{document.querySelectorAll('.tb').forEach(x=>x.classList.remove('active'));b.classList.add('active');document.querySelectorAll('.sec').forEach(s=>s.classList.remove('active'));document.getElementById(b.dataset.v+'-section').classList.add('active')});
 async function fst(){try{const r=await fetch('/api/status'),d=await r.json();d.tools.forEach(t=>{const c=document.querySelector('[data-t="'+t.name+'"]'),g=document.getElementById('tg-'+t.name),s=document.getElementById('st-'+t.name);if(t.active){c.classList.add('active');g.checked=true;s.textContent='Running';s.classList.add('run')}else{c.classList.remove('active');g.checked=false;s.textContent='Stopped';s.classList.remove('run')}})}catch(e){}}
 async function tog(t,en){document.querySelectorAll('.sw input').forEach(i=>i.disabled=true);const s=document.getElementById('st-'+t);s.innerHTML=en?'<span class="sp"></span>Starting...':'Stopping...';try{const r=await fetch('/api/toggle',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tool:t,action:en?'start':'stop'})});const d=await r.json();if(!d.success)alert('Error: '+d.error)}catch(e){alert('Failed: '+e)}document.querySelectorAll('.sw input').forEach(i=>i.disabled=false);fst()}
 async function flg(){try{const r=await fetch('/api/logs'),d=await r.json(),v=document.getElementById('log');v.innerHTML=d.lines.map(l=>{let c='ll';if(l.includes('===')||l.includes('Starting')||l.includes('Stopping'))c+=' hi';else if(l.includes('✅'))c+=' ok';else if(l.includes('error')||l.includes('Error'))c+=' er';return'<div class="'+c+'">'+esc(l)+'</div>'}).join('');v.scrollTop=v.scrollHeight}catch(e){}}
 async function dns(){try{const r=await fetch('/api/dns-check'),d=await r.json();Object.entries(d).forEach(([k,v])=>{let id=k.startsWith('admin.code.')?'dns-admin':k.startsWith('code.')?'dns-code':'dns-app';const e=document.getElementById(id);e.innerHTML=v?'✓':'✗';e.className=v?'dns-ok':'dns-fail';e.title=k+(v?' OK':' fail')})}catch(e){}}
-async function upd(){if(updating)return;updating=true;const b=document.getElementById('ubtn'),p=document.getElementById('uprog'),l=document.getElementById('ulog');b.disabled=true;b.innerHTML='<span class="sp"></span>Updating...';p.classList.add('active');l.innerHTML='';try{const r=await fetch('/api/update',{method:'POST'}),rd=r.body.getReader(),dc=new TextDecoder();while(true){const{value,done}=await rd.read();if(done)break;dc.decode(value).split('\n').filter(x=>x.startsWith('data: ')).forEach(x=>{const m=x.replace('data: ','');if(m==='DONE'){updating=false;b.disabled=false;b.textContent='🚀 Update All Tools';return}let c='ll';if(m.includes('📦')||m.includes('🐳'))c+=' hi';else if(m.includes('✅'))c+=' ok';else if(m.includes('⚠️'))c+=' er';l.innerHTML+='<div class="'+c+'">'+esc(m)+'</div>';l.scrollTop=l.scrollHeight})}}catch(e){l.innerHTML+='<div class="ll er">Error: '+e+'</div>';updating=false;b.disabled=false;b.textContent='🚀 Update All Tools'}}
+async function upd(){if(updating)return;updating=true;const b=document.getElementById('ubtn'),s=document.getElementById('sbtn'),p=document.getElementById('uprog'),l=document.getElementById('ulog');b.disabled=true;b.innerHTML='<span class="sp"></span>Updating...';s.style.display='inline-block';p.classList.add('active');l.innerHTML='';try{const r=await fetch('/api/update',{method:'POST'}),rd=r.body.getReader(),dc=new TextDecoder();while(true){const{value,done}=await rd.read();if(done)break;dc.decode(value).split('\n').filter(x=>x.startsWith('data: ')).forEach(x=>{const m=x.replace('data: ','');if(m==='DONE'){updating=false;b.disabled=false;b.textContent='🚀 Update All Tools';s.style.display='none';return}let c='ll';if(m.includes('📦')||m.includes('🐳'))c+=' hi';else if(m.includes('✅'))c+=' ok';else if(m.includes('⚠️'))c+=' er';l.innerHTML+='<div class="'+c+'">'+esc(m)+'</div>';l.scrollTop=l.scrollHeight})}}catch(e){l.innerHTML+='<div class="ll er">Error: '+e+'</div>';updating=false;b.disabled=false;b.textContent='🚀 Update All Tools';s.style.display='none'}}
+async function stopUpd(){if(!updating)return;try{await fetch('/api/stop-update',{method:'POST'})}catch(e){}}
 function esc(t){const d=document.createElement('div');d.textContent=t;return d.innerHTML}fst();flg();dns();setInterval(()=>{if(!updating){fst();flg()}},3000)</script></body></html>` + "`" + `
 `
 
@@ -2809,9 +2896,10 @@ echo "    • Node.js   $(node --version 2>/dev/null || echo 'not found')"
 echo "    • Bun       $(${USER_HOME}/.bun/bin/bun --version 2>/dev/null || echo 'not found')"
 echo "    • Deno      $(${USER_HOME}/.deno/bin/deno --version 2>/dev/null | head -1 | awk '{print $2}' || echo 'not found')"
 echo "    • uv        $(${USER_HOME}/.local/bin/uv --version 2>/dev/null | awk '{print $2}' || echo 'not found')"
-echo "    • opencode  $(${USER_HOME}/.opencode/bin/opencode --version 2>/dev/null || echo 'not found')"
-echo "    • nanocode  $(${USER_HOME}/.bun/bin/nanocode --version 2>/dev/null || echo 'not found')"
-echo "    • shelley   $(/usr/local/bin/shelley version 2>/dev/null | grep commit | head -1 | awk -F'"' '{print substr($4,1,7)}' || echo 'not found')"
+echo "    • opencode    $(${USER_HOME}/.opencode/bin/opencode --version 2>/dev/null || echo 'not found')"
+echo "    • nanocode    $(${USER_HOME}/.bun/bin/nanocode --version 2>/dev/null || echo 'not found')"
+echo "    • claude-code $(${USER_HOME}/.claude/local/claude --version 2>/dev/null | head -1 || echo 'not found')"
+echo "    • shelley     $(/usr/local/bin/shelley version 2>/dev/null | grep commit | head -1 | awk -F'"' '{print substr($4,1,7)}' || echo 'not found')"
 echo ""
 echo "  ─────────────────────────────────────────────────────────────────────────────"
 echo "  AI Coding Agents:"
@@ -2968,15 +3056,20 @@ func updateToolsCmd(containerName, containerUser string) tea.Cmd {
 			v, _ := userExec("~/.bun/bin/nanocode --version 2>/dev/null || echo 'not installed'")
 			return v
 		}())
+		currentClaudeCode := strings.TrimSpace(func() string {
+			v, _ := userExec("~/.claude/local/claude --version 2>/dev/null | head -1 || echo 'not installed'")
+			return v
+		}())
 		// For Shelley, we use commit hash since building from source shows "dev" as version
 		currentShelleyCommit := strings.TrimSpace(func() string {
 			v, _ := rootExec("/usr/local/bin/shelley version 2>/dev/null | grep '\"commit\"' | cut -d'\"' -f4 || echo 'not installed'")
 			return v
 		}())
 		
-		result += fmt.Sprintf("  Current opencode:  %s\n", currentOpencode)
-		result += fmt.Sprintf("  Current nanocode:  %s\n", currentNanocode)
-		result += fmt.Sprintf("  Current shelley:   %s\n", func() string {
+		result += fmt.Sprintf("  Current opencode:    %s\n", currentOpencode)
+		result += fmt.Sprintf("  Current nanocode:    %s\n", currentNanocode)
+		result += fmt.Sprintf("  Current claude-code: %s\n", currentClaudeCode)
+		result += fmt.Sprintf("  Current shelley:     %s\n", func() string {
 			if currentShelleyCommit == "not installed" { return "not installed" }
 			if len(currentShelleyCommit) > 7 { return currentShelleyCommit[:7] }
 			return currentShelleyCommit
@@ -2993,22 +3086,28 @@ func updateToolsCmd(containerName, containerUser string) tea.Cmd {
 		latestNanocodeOut, _ := exec.Command("bash", "-c", "curl -s https://api.github.com/repos/nanogpt-community/nanocode/releases/latest 2>/dev/null | grep -o '\"tag_name\": *\"[^\"]*\"' | head -1 | sed 's/\"tag_name\": *\"//' | sed 's/\"$//' | sed 's/^v//'").Output()
 		latestNanocode := strings.TrimSpace(string(latestNanocodeOut))
 
+		// Get latest Claude Code version from GitHub
+		latestClaudeCodeOut, _ := exec.Command("bash", "-c", "curl -s https://api.github.com/repos/anthropics/claude-code/releases/latest 2>/dev/null | grep -o '\"tag_name\": *\"[^\"]*\"' | head -1 | sed 's/\"tag_name\": *\"//' | sed 's/\"$//' | sed 's/^v//'").Output()
+		latestClaudeCode := strings.TrimSpace(string(latestClaudeCodeOut))
+
 		// Get latest Shelley commit hash from GitHub (main branch)
 		latestShelleyCommitOut, _ := exec.Command("bash", "-c", "curl -s https://api.github.com/repos/boldsoftware/shelley/commits/main | grep '\"sha\"' | head -1 | cut -d'\"' -f4").Output()
 		latestShelleyCommit := strings.TrimSpace(string(latestShelleyCommitOut))
 		
-		result += fmt.Sprintf("  Latest opencode:  %s\n", latestOpencode)
-		result += fmt.Sprintf("  Latest nanocode:  %s\n", latestNanocode)
-		result += fmt.Sprintf("  Latest shelley:   %s\n", func() string {
+		result += fmt.Sprintf("  Latest opencode:     %s\n", latestOpencode)
+		result += fmt.Sprintf("  Latest nanocode:     %s\n", latestNanocode)
+		result += fmt.Sprintf("  Latest claude-code:  %s\n", latestClaudeCode)
+		result += fmt.Sprintf("  Latest shelley:      %s\n", func() string {
 			if len(latestShelleyCommit) > 7 { return latestShelleyCommit[:7] }
 			return latestShelleyCommit
 		}())
 
 		opencodeNeedsUpdate := latestOpencode != "" && currentOpencode != latestOpencode && currentOpencode != "not installed"
 		nanocodeNeedsUpdate := latestNanocode != "" && currentNanocode != latestNanocode && currentNanocode != "not installed"
+		claudeCodeNeedsUpdate := latestClaudeCode != "" && currentClaudeCode != latestClaudeCode && currentClaudeCode != "not installed"
 		shelleyNeedsUpdate := latestShelleyCommit != "" && currentShelleyCommit != latestShelleyCommit && currentShelleyCommit != "not installed"
 		
-		var opencodeErr, nanocodeErr, shelleyErr error
+		var opencodeErr, nanocodeErr, claudeCodeErr, shelleyErr error
 
 		// Step 4: Update opencode if needed
 		if opencodeNeedsUpdate {
@@ -3060,7 +3159,32 @@ func updateToolsCmd(containerName, containerUser string) tea.Cmd {
 			result += fmt.Sprintf("\n✅ nanocode is already up to date (%s)\n", currentNanocode)
 		}
 
-		// Step 6: Update shelley if needed (build from source with domain patch)
+		// Step 6: Update Claude Code if needed
+		if claudeCodeNeedsUpdate {
+			result += fmt.Sprintf("\nUpdating claude-code (%s -> %s)...\n", currentClaudeCode, latestClaudeCode)
+			claudeOut, err := userExec("curl -fsSL https://claude.ai/install.sh | bash && ~/.claude/local/claude --version | head -1")
+			result += claudeOut
+			claudeCodeErr = err
+			if err != nil {
+				result += fmt.Sprintf("Warning: claude-code update had issues: %v\n", err)
+			} else {
+				result += "✅ claude-code updated\n"
+			}
+		} else if currentClaudeCode == "not installed" {
+			result += "\nInstalling claude-code...\n"
+			claudeOut, err := userExec("curl -fsSL https://claude.ai/install.sh | bash && ~/.claude/local/claude --version | head -1")
+			result += claudeOut
+			claudeCodeErr = err
+			if err != nil {
+				result += fmt.Sprintf("Warning: claude-code install had issues: %v\n", err)
+			} else {
+				result += "✅ claude-code installed\n"
+			}
+		} else {
+			result += fmt.Sprintf("\n✅ claude-code is already up to date (%s)\n", currentClaudeCode)
+		}
+
+		// Step 7: Update shelley if needed (build from source with domain patch)
 		// Get domain from .shelley_env
 		domainOut, _ := userExec("grep '^SHELLEY_DOMAIN=' ~/.shelley_env 2>/dev/null | cut -d'=' -f2 || echo ''")
 		shelleyDomain := strings.TrimSpace(domainOut)
@@ -3186,13 +3310,14 @@ echo "Verifying..."
 			result += fmt.Sprintf("\n✅ shelley is already up to date (%s)\n", func() string { if len(currentShelleyCommit) > 7 { return currentShelleyCommit[:7] }; return currentShelleyCommit }())
 		}
 
-		if opencodeErr != nil || nanocodeErr != nil || shelleyErr != nil {
+		if opencodeErr != nil || nanocodeErr != nil || claudeCodeErr != nil || shelleyErr != nil {
 			result += "\n⚠️ Update completed with some warnings"
 			return toolsUpdateMsg{output: result, success: false}
 		}
 
-		if !opencodeNeedsUpdate && !nanocodeNeedsUpdate && !shelleyNeedsUpdate && 
-		   currentOpencode != "not installed" && currentNanocode != "not installed" && currentShelleyCommit != "not installed" {
+		if !opencodeNeedsUpdate && !nanocodeNeedsUpdate && !claudeCodeNeedsUpdate && !shelleyNeedsUpdate && 
+		   currentOpencode != "not installed" && currentNanocode != "not installed" && 
+		   currentClaudeCode != "not installed" && currentShelleyCommit != "not installed" {
 			result += "\n✅ All tools are already up to date!"
 		} else {
 			result += "\n✅ Update check complete!"
