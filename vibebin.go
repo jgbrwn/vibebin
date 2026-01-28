@@ -2529,40 +2529,84 @@ func handleUpdate(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream"); w.Header().Set("Cache-Control", "no-cache")
 	flusher, _ := w.(http.Flusher)
 	send := func(m string) { fmt.Fprintf(w, "data: %s\n\n", m); flusher.Flush() }
-	send("🔄 Stopping running processes...")
+	
+	// Step 1: Stop running processes
+	send("Checking for running processes...")
 	state.mu.Lock()
-	if state.activeTool != "" { stopTool(state.activeTool); state.activeTool = ""; state.activeProcess = nil; state.activePID = 0 }
+	if state.activeTool != "" { 
+		send(fmt.Sprintf("Stopping %s...", state.activeTool))
+		stopTool(state.activeTool); state.activeTool = ""; state.activeProcess = nil; state.activePID = 0 
+	}
 	state.mu.Unlock()
-	exec.Command("pkill", "-f", "opencode serve").Run(); exec.Command("pkill", "-f", "nanocode serve").Run()
+	exec.Command("pkill", "-f", "opencode serve").Run()
+	exec.Command("pkill", "-f", "nanocode serve").Run()
 	exec.Command("pkill", "-f", "shelley serve").Run()
 	time.Sleep(time.Second)
 	send("✅ Processes stopped\n")
-	// Get current versions
-	currentOpencode, _ := exec.Command("bash", "-c", "$HOME/.opencode/bin/opencode --version 2>/dev/null || echo 'not installed'").Output()
-	currentNanocode, _ := exec.Command("bash", "-c", "$HOME/.bun/bin/nanocode --version 2>/dev/null || echo 'not installed'").Output()
-	currentShelleyCommit, _ := exec.Command("bash", "-c", "/usr/local/bin/shelley version 2>/dev/null | grep '\"commit\"' | cut -d'\"' -f4 || echo 'not installed'").Output()
-	shelleyDisplay := strings.TrimSpace(string(currentShelleyCommit))
-	if len(shelleyDisplay) > 7 { shelleyDisplay = shelleyDisplay[:7] }
-	send(fmt.Sprintf("Current: opencode %s, nanocode %s, shelley %s\n", strings.TrimSpace(string(currentOpencode)), strings.TrimSpace(string(currentNanocode)), shelleyDisplay))
-	send("\n📦 [1/3] Updating opencode...")
-	send("Running: curl -fsSL https://opencode.ai/install | bash")
-	out, _ := exec.Command("bash", "-c", "curl -fsSL https://opencode.ai/install 2>/dev/null | bash 2>&1 | tail -5").CombinedOutput()
-	if len(strings.TrimSpace(string(out))) > 0 { send(string(out)) }
-	send("✅ opencode updated\n")
-	send("\n📦 [2/3] Updating nanocode...")
-	send("Running: bun i -g nanocode@latest")
-	out, _ = exec.Command("bash", "-c", "export PATH=$PATH:$HOME/.bun/bin && bun i -g nanocode@latest 2>&1 | grep -v '^$'").CombinedOutput()
-	if len(strings.TrimSpace(string(out))) > 0 { send(string(out)) }
-	send("✅ nanocode updated\n")
-	// Get latest Shelley commit from GitHub main branch
-	latestShelleyCommit, _ := exec.Command("bash", "-c", "curl -s https://api.github.com/repos/boldsoftware/shelley/commits/main | grep '\"sha\"' | head -1 | cut -d'\"' -f4 || echo ''").Output()
-	latestShelleyStr := strings.TrimSpace(string(latestShelleyCommit))
-	currentShelleyStr := strings.TrimSpace(string(currentShelleyCommit))
-	latestDisplay := latestShelleyStr
-	if len(latestDisplay) > 7 { latestDisplay = latestDisplay[:7] }
-	currentDisplay := currentShelleyStr
-	if len(currentDisplay) > 7 { currentDisplay = currentDisplay[:7] }
-	send(fmt.Sprintf("\n📦 [3/3] Updating Shelley (current: %s, latest: %s)...", currentDisplay, latestDisplay))
+	
+	// Step 2: Check current versions
+	send("Checking current versions...")
+	currentOpencode := strings.TrimSpace(string(func() []byte { out, _ := exec.Command("bash", "-c", "$HOME/.opencode/bin/opencode --version 2>/dev/null || echo 'not installed'").Output(); return out }()))
+	currentNanocode := strings.TrimSpace(string(func() []byte { out, _ := exec.Command("bash", "-c", "$HOME/.bun/bin/nanocode --version 2>/dev/null || echo 'not installed'").Output(); return out }()))
+	currentShelleyCommit := strings.TrimSpace(string(func() []byte { out, _ := exec.Command("bash", "-c", "/usr/local/bin/shelley version 2>/dev/null | grep '\"commit\"' | cut -d'\"' -f4 || echo 'not installed'").Output(); return out }()))
+	currentShelleyDisplay := currentShelleyCommit
+	if len(currentShelleyDisplay) > 7 { currentShelleyDisplay = currentShelleyDisplay[:7] }
+	send(fmt.Sprintf("  Current opencode:  %s", currentOpencode))
+	send(fmt.Sprintf("  Current nanocode:  %s", currentNanocode))
+	send(fmt.Sprintf("  Current shelley:   %s\n", currentShelleyDisplay))
+	
+	// Step 3: Check latest available versions
+	send("Checking latest available versions...")
+	latestOpencode := strings.TrimSpace(string(func() []byte { out, _ := exec.Command("bash", "-c", "curl -s https://api.github.com/repos/anomalyco/opencode/releases/latest 2>/dev/null | grep -o '\"tag_name\": *\"[^\"]*\"' | head -1 | sed 's/\"tag_name\": *\"//' | sed 's/\"$//' | sed 's/^v//'").Output(); return out }()))
+	latestNanocode := strings.TrimSpace(string(func() []byte { out, _ := exec.Command("bash", "-c", "curl -s https://api.github.com/repos/nanogpt-community/nanocode/releases/latest 2>/dev/null | grep -o '\"tag_name\": *\"[^\"]*\"' | head -1 | sed 's/\"tag_name\": *\"//' | sed 's/\"$//' | sed 's/^v//'").Output(); return out }()))
+	latestShelleyCommit := strings.TrimSpace(string(func() []byte { out, _ := exec.Command("bash", "-c", "curl -s https://api.github.com/repos/boldsoftware/shelley/commits/main | grep '\"sha\"' | head -1 | cut -d'\"' -f4").Output(); return out }()))
+	latestShelleyDisplay := latestShelleyCommit
+	if len(latestShelleyDisplay) > 7 { latestShelleyDisplay = latestShelleyDisplay[:7] }
+	send(fmt.Sprintf("  Latest opencode:   %s", latestOpencode))
+	send(fmt.Sprintf("  Latest nanocode:   %s", latestNanocode))
+	send(fmt.Sprintf("  Latest shelley:    %s\n", latestShelleyDisplay))
+	
+	// Determine what needs updating
+	opencodeNeedsUpdate := latestOpencode != "" && currentOpencode != latestOpencode && currentOpencode != "not installed"
+	nanocodeNeedsUpdate := latestNanocode != "" && currentNanocode != latestNanocode && currentNanocode != "not installed"
+	shelleyNeedsUpdate := latestShelleyCommit != "" && currentShelleyCommit != latestShelleyCommit && currentShelleyCommit != "not installed"
+	
+	// Step 4: Update opencode
+	send("📦 [1/3] OpenCode")
+	if opencodeNeedsUpdate {
+		send(fmt.Sprintf("Updating opencode (%s -> %s)...", currentOpencode, latestOpencode))
+		out, _ := exec.Command("bash", "-c", "curl -fsSL https://opencode.ai/install 2>/dev/null | bash 2>&1 | tail -3").CombinedOutput()
+		if len(strings.TrimSpace(string(out))) > 0 { send(strings.TrimSpace(string(out))) }
+		newVer, _ := exec.Command("bash", "-c", "$HOME/.opencode/bin/opencode --version 2>/dev/null").Output()
+		send(fmt.Sprintf("✅ opencode updated to %s\n", strings.TrimSpace(string(newVer))))
+	} else if currentOpencode == "not installed" {
+		send("Installing opencode...")
+		out, _ := exec.Command("bash", "-c", "curl -fsSL https://opencode.ai/install 2>/dev/null | bash 2>&1 | tail -3").CombinedOutput()
+		if len(strings.TrimSpace(string(out))) > 0 { send(strings.TrimSpace(string(out))) }
+		send("✅ opencode installed\n")
+	} else {
+		send(fmt.Sprintf("✅ opencode is already up to date (%s)\n", currentOpencode))
+	}
+	
+	// Step 5: Update nanocode
+	send("📦 [2/3] NanoCode")
+	if nanocodeNeedsUpdate {
+		send(fmt.Sprintf("Updating nanocode (%s -> %s)...", currentNanocode, latestNanocode))
+		out, _ := exec.Command("bash", "-c", "export PATH=$PATH:$HOME/.bun/bin && bun i -g nanocode@latest 2>&1 | tail -3").CombinedOutput()
+		if len(strings.TrimSpace(string(out))) > 0 { send(strings.TrimSpace(string(out))) }
+		newVer, _ := exec.Command("bash", "-c", "$HOME/.bun/bin/nanocode --version 2>/dev/null").Output()
+		send(fmt.Sprintf("✅ nanocode updated to %s\n", strings.TrimSpace(string(newVer))))
+	} else if currentNanocode == "not installed" {
+		send("Installing nanocode...")
+		out, _ := exec.Command("bash", "-c", "export PATH=$PATH:$HOME/.bun/bin && bun i -g nanocode@latest 2>&1 | tail -3").CombinedOutput()
+		if len(strings.TrimSpace(string(out))) > 0 { send(strings.TrimSpace(string(out))) }
+		send("✅ nanocode installed\n")
+	} else {
+		send(fmt.Sprintf("✅ nanocode is already up to date (%s)\n", currentNanocode))
+	}
+	
+	// Step 6: Update Shelley
+	send("📦 [3/3] Shelley")
 	
 	// Get SHELLEY_DOMAIN from .shelley_env
 	domainBytes, _ := exec.Command("bash", "-c", "grep '^SHELLEY_DOMAIN=' ~/.shelley_env 2>/dev/null | cut -d'=' -f2 || echo ''").Output()
@@ -2600,27 +2644,8 @@ func handleUpdate(w http.ResponseWriter, r *http.Request) {
 		"/usr/local/bin/shelley version | grep version\n" +
 		"echo \"Done!\"\n"
 	
-	if latestShelleyStr != "" && currentShelleyStr != latestShelleyStr && currentShelleyStr != "not installed" {
-		send("Rebuilding from source (this may take 1-2 minutes)...")
-		out, err := exec.Command("bash", "-c", shelleyBuildScript).CombinedOutput()
-		outLines := strings.Split(string(out), "\n")
-		for _, line := range outLines {
-			if strings.TrimSpace(line) != "" { send(line) }
-		}
-		if err != nil {
-			send(fmt.Sprintf("Error: %v", err))
-		} else {
-			verify, _ := exec.Command("bash", "-c", "/usr/local/bin/shelley version 2>/dev/null | grep '\"commit\"' | cut -d'\"' -f4").Output()
-			if v := strings.TrimSpace(string(verify)); v != "" {
-				if len(v) > 7 { v = v[:7] }
-				send(fmt.Sprintf("✅ Shelley updated to %s\n", v))
-			} else {
-				send("✅ Shelley updated\n")
-			}
-		}
-	} else if currentShelleyStr == latestShelleyStr {
-		send("Already at latest commit\n")
-	} else {
+	if shelleyNeedsUpdate {
+		send(fmt.Sprintf("Updating shelley (%s -> %s)...", currentShelleyDisplay, latestShelleyDisplay))
 		send("Building from source (this may take 1-2 minutes)...")
 		out, err := exec.Command("bash", "-c", shelleyBuildScript).CombinedOutput()
 		outLines := strings.Split(string(out), "\n")
@@ -2633,13 +2658,42 @@ func handleUpdate(w http.ResponseWriter, r *http.Request) {
 			verify, _ := exec.Command("bash", "-c", "/usr/local/bin/shelley version 2>/dev/null | grep '\"commit\"' | cut -d'\"' -f4").Output()
 			if v := strings.TrimSpace(string(verify)); v != "" {
 				if len(v) > 7 { v = v[:7] }
-				send(fmt.Sprintf("✅ Shelley installed (commit %s)\n", v))
+				send(fmt.Sprintf("✅ shelley updated to %s\n", v))
 			} else {
-				send("✅ Shelley installed\n")
+				send("✅ shelley updated\n")
 			}
 		}
+	} else if currentShelleyCommit == "not installed" {
+		send("Installing shelley...")
+		send("Building from source (this may take 1-2 minutes)...")
+		out, err := exec.Command("bash", "-c", shelleyBuildScript).CombinedOutput()
+		outLines := strings.Split(string(out), "\n")
+		for _, line := range outLines {
+			if strings.TrimSpace(line) != "" { send(line) }
+		}
+		if err != nil {
+			send(fmt.Sprintf("Error: %v", err))
+		} else {
+			verify, _ := exec.Command("bash", "-c", "/usr/local/bin/shelley version 2>/dev/null | grep '\"commit\"' | cut -d'\"' -f4").Output()
+			if v := strings.TrimSpace(string(verify)); v != "" {
+				if len(v) > 7 { v = v[:7] }
+				send(fmt.Sprintf("✅ shelley installed (commit %s)\n", v))
+			} else {
+				send("✅ shelley installed\n")
+			}
+		}
+	} else {
+		send(fmt.Sprintf("✅ shelley is already up to date (%s)\n", currentShelleyDisplay))
 	}
-	send("\n🎉 All updates complete!"); send("DONE")
+	
+	// Summary
+	if !opencodeNeedsUpdate && !nanocodeNeedsUpdate && !shelleyNeedsUpdate &&
+	   currentOpencode != "not installed" && currentNanocode != "not installed" && currentShelleyCommit != "not installed" {
+		send("\n✅ All tools are already up to date!")
+	} else {
+		send("\n🎉 Update complete!")
+	}
+	send("DONE")
 }
 
 func handleDNSCheck(w http.ResponseWriter, r *http.Request) {
