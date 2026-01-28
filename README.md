@@ -45,7 +45,7 @@ Each container is a fully persistent Linux sandbox running **Ubuntu 24.04 LTS (N
 
 ### Use Cases
 
-- **AI-assisted development**: Use opencode/nanocode/shelley as your AI pair programmer with full system access
+- **AI-assisted development**: Use opencode/nanocode/claude-code/shelley as your AI pair programmer with full system access
 - **Vibe coding**: Spin up isolated sandboxes for experimental projects
 - **App/site hosting**: Deploy and iterate on web applications
 - **Learning environments**: Safe, isolated Linux environments for experimentation
@@ -261,6 +261,7 @@ During container creation, the following is automatically installed:
 **AI Coding Agents:**
 - **opencode** (open source AI coding agent)
 - **nanocode** (NanoGPT-powered AI coding agent)
+- **claude-code** (Anthropic's CLI coding agent)
 - **shelley** (AI web agent from Bold Software)
 
 **System Utilities:**
@@ -326,7 +327,7 @@ sudo vibebin
 - `p` - Change app port
 - `a` - Change auth credentials
 - `S` - Snapshot management
-- `u` - Update AI coding tools (opencode/nanocode/shelley)
+- `u` - Update AI coding tools (opencode/nanocode/claude-code/shelley)
 - `Esc` - Back to list
 
 **Snapshot View:**
@@ -355,9 +356,10 @@ sudo vibebin
 ### AI Coding Agents
 - **opencode**: Open source, supports multiple LLM providers
 - **nanocode**: NanoGPT-optimized fork with built-in features
+- **claude-code**: Anthropic's official CLI agent (CLI only)
 - **shelley**: AI web agent with full coding capabilities
 - **Easy Configuration**: All tools prompt for API keys on first run
-- **Web UI Access**: Start any tool in serve mode on port 9999
+- **Web UI Access**: Start opencode, nanocode, or shelley in serve mode on port 9999
 
 ## Using the AI Coding Tools
 
@@ -378,9 +380,11 @@ opencode
 # Or run nanocode
 nanocode
 
+# Or run claude-code
+claude
 ```
 
-All tools will prompt you to configure your LLM provider and API key on first run. Note that Shelley is web-only (no CLI mode).
+All tools will prompt you to configure your LLM provider and API key on first run. Note that Shelley is web-only (no CLI mode) and Claude Code is CLI-only (no web UI).
 
 ### Web UI Mode
 
@@ -445,7 +449,7 @@ The admin app runs as a systemd service (`admin-app`) and is protected by the sa
 
 ### Updating AI Tools
 
-From the container detail view in the TUI, press `u` to update opencode, nanocode, and shelley to their latest versions.
+From the container detail view in the TUI, press `u` to update opencode, nanocode, claude-code, and shelley to their latest versions.
 
 ## SSH Access
 
@@ -580,9 +584,9 @@ incus info container-name
 - Verify upstream config: `cat /var/lib/sshpiper/container-name/sshpiper_upstream`
 
 **AI coding tools not working:**
-- SSH to the container and run `opencode` or `nanocode` interactively, or `start-shelley.sh` for Shelley web UI
+- SSH to the container and run `opencode`, `nanocode`, or `claude` interactively, or `start-shelley.sh` for Shelley web UI
 - All tools will prompt for API key configuration on first run
-- Check tool versions: `opencode --version`, `nanocode --version`, `shelley version`
+- Check tool versions: `opencode --version`, `nanocode --version`, `claude --version`, `shelley version`
 
 **Sync daemon issues:**
 ```bash
@@ -639,7 +643,7 @@ Each container created by vibebin is fully isolated by default:
 
 If you run 3 containers (app1.example.com, app2.example.com, app3.example.com):
 - Each has its own isolated Linux environment
-- Each has its own AI tools installation (opencode, nanocode, shelley)
+- Each has its own AI tools installation (opencode, nanocode, claude-code, shelley)
 - An agent in app1 cannot access files or processes in app2 or app3
 - They share the host's resources (CPU, RAM) but are otherwise independent
 
@@ -672,6 +676,7 @@ This project is licensed under the MIT License. See [LICENSE](LICENSE) for detai
 
 - **opencode**: [anomalyco/opencode](https://github.com/anomalyco/opencode) - MIT License
 - **nanocode**: [nanogpt-community/nanocode](https://github.com/nanogpt-community/nanocode) - Fork of opencode
+- **claude-code**: [anthropics/claude-code](https://github.com/anthropics/claude-code) - Apache License 2.0
 - **shelley**: [boldsoftware/shelley](https://github.com/boldsoftware/shelley) - Apache License 2.0
 - **Incus**: [linuxcontainers/incus](https://github.com/lxc/incus) - Apache 2.0 License
 - **Caddy**: [caddyserver/caddy](https://github.com/caddyserver/caddy) - Apache 2.0 License
