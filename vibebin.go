@@ -1171,7 +1171,7 @@ func importContainer(db *sql.DB, name, domain string, image containerImage, appP
 		configureSSHPiper(name, ip, containerUser, sshKey)
 	}
 
-	// Configure the container environment (user, Docker, Go, Node, opencode, nanocode)
+	// Configure the container environment (user, Docker, Go, Node, opencode, nanocode, claude-code, shelley)
 	silentProgress := func(msg string) {} // Silent for imports
 	configureContainerEnvironment(name, containerUser, domain, sshKey, silentProgress)
 
@@ -1792,7 +1792,7 @@ func configureSSHPiper(name, ip, containerUser, userPublicKey string) {
 }
 
 // configureContainerEnvironment sets up the container with all required software and configuration
-// This includes: user setup, Docker, Go, Node.js, uv, bun, deno, opencode, and nanocode
+// This includes: user setup, Docker, Go, Node.js, uv, bun, deno, opencode, nanocode, claude-code, and shelley
 func configureContainerEnvironment(containerName, containerUser, domain, sshKey string, sendProgress func(string)) error {
 	// Helper to run commands in container as root with error handling
 	rootExec := func(args ...string) error {
