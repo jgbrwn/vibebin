@@ -2500,7 +2500,7 @@ func startTool(tool string) error {
 	proj := filepath.Join(state.homeDir, ProjectsDir)
 	switch tool {
 	case "opencode": cmd = exec.Command("bash", "-l", "-c", fmt.Sprintf("cd %s && %s/.opencode/bin/opencode serve --port %d --hostname 0.0.0.0", proj, state.homeDir, WebUIPort))
-	case "nanocode": cmd = exec.Command("bash", "-l", "-c", fmt.Sprintf("cd %s && %s/.bun/bin/nanocode serve --port %d --hostname 0.0.0.0", proj, state.homeDir, WebUIPort))
+	case "nanocode": cmd = exec.Command("bash", "-l", "-c", fmt.Sprintf("cd %s && export PATH=$PATH:%s/.bun/bin && nanocode serve --port %d --hostname 0.0.0.0", proj, state.homeDir, WebUIPort))
 	case "shelley":
 		cmd = exec.Command("bash", "-c", fmt.Sprintf("cd %s && /usr/local/bin/start-shelley.sh", proj))
 		fmt.Fprintf(logFile, "Note: Shelley requires API keys in ~/.shelley_env\n")
