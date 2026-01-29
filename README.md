@@ -12,11 +12,11 @@ Create and host your vibe-coded apps on a single VPS/server.
 
 **AI Tools Admin Web App** - Toggle AI coding tools on/off:
 
-![AI Tools Admin - Manage](images/admin-manage.png?v=2)
+![AI Tools Admin - Manage](images/admin-manage.png?v=3)
 
 **AI Tools Admin Web App** - One-click update for all tools:
 
-![AI Tools Admin - Update](images/admin-update.png?v=2)
+![AI Tools Admin - Update](images/admin-update.png?v=3)
 
 ## *UPFRONT DISCLOSURE*
 
