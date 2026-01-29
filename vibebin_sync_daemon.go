@@ -76,7 +76,8 @@ func main() {
 	fmt.Println("Restoring container states...")
 	restoreContainerStates(db)
 
-	// Ensure Caddy logging is configured
+	// Ensure Caddy listeners and logging are configured
+	ensureCaddyListeners()
 	ensureCaddyLogging()
 
 	// Setup signal handling for graceful shutdown
@@ -370,6 +371,52 @@ func getContainerStatus(name string) (status, ip string) {
 	return status, ip
 }
 
+// ensureCaddyListeners ensures Caddy is listening on both HTTP (80) and HTTPS (443)
+// After a Caddy restart from Caddyfile, it may only listen on :80
+func ensureCaddyListeners() {
+	client := &http.Client{Timeout: 10 * time.Second}
+
+	// Check current listen addresses
+	resp, err := client.Get(CaddyAPI + "/config/apps/http/servers/srv0/listen")
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+
+	var listen []string
+	if err := json.NewDecoder(resp.Body).Decode(&listen); err != nil {
+		return
+	}
+
+	// Check if :443 is already in the listen list
+	has443 := false
+	for _, addr := range listen {
+		if strings.Contains(addr, ":443") {
+			has443 = true
+			break
+		}
+	}
+
+	if has443 {
+		return // Already listening on HTTPS
+	}
+
+	fmt.Println("Configuring Caddy to listen on :80 and :443...")
+
+	// Set listen addresses to include both HTTP and HTTPS
+	listenAddrs := []string{":80", ":443"}
+	body, _ := json.Marshal(listenAddrs)
+	req, _ := http.NewRequest("PATCH", CaddyAPI+"/config/apps/http/servers/srv0/listen", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp2, err := client.Do(req)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to configure Caddy listeners: %v\n", err)
+		return
+	}
+	resp2.Body.Close()
+	fmt.Println("Caddy listeners configured")
+}
+
 // ensureCaddyLogging configures server-level access logging via Caddy API
 // This applies to all routes on srv0, including dynamically added ones
 func ensureCaddyLogging() {
@@ -521,8 +568,9 @@ func checkAndRepairRoutes(db *sql.DB) {
 		repaired = true
 	}
 
-	// If we repaired routes, also ensure logging is configured
+	// If we repaired routes, also ensure listeners and logging are configured
 	if repaired {
+		ensureCaddyListeners()
 		ensureCaddyLogging()
 	}
 }

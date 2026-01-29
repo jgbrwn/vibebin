@@ -61,9 +61,9 @@ logpath = /var/log/caddy/access.log
 # Use UFW as the banning action
 banaction = ufw
 
-# 100 requests within 60 seconds triggers ban
-findtime = 60
-maxretry = 100
+# 10 requests within 20 seconds triggers ban
+findtime = 20s
+maxretry = 10
 
 # Ban duration: 30 days
 bantime = 30d
