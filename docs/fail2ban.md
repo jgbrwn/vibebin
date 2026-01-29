@@ -61,9 +61,9 @@ port = http,https
 filter = caddy-flood
 logpath = /var/log/caddy/access.log
 
-# 25 requests (maxretry) within 30 seconds (findtime) triggers the ban
+# 100 requests (maxretry) within 30 seconds (findtime) triggers the ban
 findtime = 30s
-maxretry = 25
+maxretry = 100
 
 # Ban duration (12 hrs)
 bantime = 12h
