@@ -96,6 +96,10 @@ bantime.maxtime   = 52w
 ## Activate Configuration
 
 ```bash
+# Create the Caddy access log file if it doesn't exist yet
+# (It may not be created until after the first container is created in Vibebin)
+sudo touch /var/log/caddy/access.log
+
 sudo systemctl restart fail2ban
 ```
 
