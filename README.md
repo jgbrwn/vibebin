@@ -119,7 +119,7 @@ Through the webUIs on OpenCode/NanoCode, adding NanoGPT as the provider is seaml
 ## Components
 
 - `vibebin` - Interactive TUI for container management
-- `vibebin_sync_daemon` - Background service for config synchronization
+- `vibebin_sync_daemon` - Background service for config synchronization (auto-heals Caddy routes on restart)
 - `containers.db` - SQLite database storing container metadata (at `/var/lib/vibebin/containers.db`)
 
 ## Prerequisites
@@ -572,6 +572,7 @@ Caddy will automatically obtain Let's Encrypt certificates for both domains.
 Routes are managed via Caddy's Admin API (localhost:2019), not config files:
 - Routes use `@id` for identification (e.g., `container-name-app`, `container-name-code`)
 - Changes are atomic and immediate (no reload required)
+- **Self-healing**: The `vibebin-sync` service monitors Caddy routes and automatically restores them if the server restarts, Caddy restarts, or routes are otherwise modified/removed
 - Query current routes: `curl http://localhost:2019/config/apps/http/servers/srv0/routes`
 
 ### Container Boot Behavior
