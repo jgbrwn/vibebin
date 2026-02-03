@@ -18,9 +18,23 @@ Create the following configuration files:
 
 ```ini
 [Definition]
-# Matches the client IP in Caddy's JSON logs
+# Matches every single request from an IP regardless of success/failure
 failregex = ^.*"remote_ip":"<HOST>".*$
 ignoreregex =
+datepattern = "ts":<DATE>
+```
+
+### Caddy Auth Filter
+
+`/etc/fail2ban/filter.d/caddy-auth.conf`
+
+```ini
+[Definition]
+# Matches the remote_ip and the status code 401/403 at the end of the JSON
+failregex = ^.*"remote_ip":"<HOST>".*"status":(401|403)\D.*$
+# Ignore successful requests
+ignoreregex =
+datepattern = "ts":<DATE>
 ```
 
 ### SSHPiper Filter
@@ -44,10 +58,6 @@ ignoreregex =
 `/etc/fail2ban/jail.local`
 
 ```ini
-# Vibebin fail2ban configuration
-# Ignores localhost and container network traffic
-# Note: Some ban times are intentionally aggressive
-
 [DEFAULT]
 ignoreip = 127.0.0.1/8 ::1 10.128.31.0/24 fd42:ace5:c1f4:81db::/64
 
@@ -60,15 +70,21 @@ enabled = true
 port = http,https
 filter = caddy-flood
 logpath = /var/log/caddy/access.log
-
-# 100 requests (maxretry) within 30 seconds (findtime) triggers the ban
-findtime = 30s
-maxretry = 100
-
-# Ban duration (12 hrs)
+findtime = 10s
+maxretry = 200
 bantime = 12h
+bantime.increment = true
+bantime.factor    = 2
+bantime.maxtime   = 52w
 
-# Incremental banning (doubles ban time on repeat offenses)
+[caddy-auth]
+enabled = true
+port = http,https
+filter = caddy-auth
+logpath = /var/log/caddy/access.log
+findtime = 5m
+maxretry = 30
+bantime = 12h
 bantime.increment = true
 bantime.factor    = 2
 bantime.maxtime   = 52w
@@ -81,8 +97,6 @@ backend  = systemd
 maxretry = 3
 findtime = 10m
 bantime  = 12h
-
-# Incremental banning (doubles ban time on repeat offenses)
 bantime.increment = true
 bantime.factor    = 2
 bantime.maxtime   = 52w
@@ -112,11 +126,13 @@ sudo fail2ban-client status
 # Check specific jail status
 sudo fail2ban-client status sshd          # Host SSH (default jail)
 sudo fail2ban-client status caddy-flood   # Caddy flood protection
+sudo fail2ban-client status caddy-auth    # Caddy auth failure protection
 sudo fail2ban-client status sshpiperd     # SSHPiper protection
 
 # View banned IPs
 sudo fail2ban-client get sshd banned
 sudo fail2ban-client get caddy-flood banned
+sudo fail2ban-client get caddy-auth banned
 sudo fail2ban-client get sshpiperd banned
 ```
 
@@ -125,6 +141,7 @@ sudo fail2ban-client get sshpiperd banned
 ```bash
 # Unban from specific jail
 sudo fail2ban-client set caddy-flood unbanip <IP_ADDRESS>
+sudo fail2ban-client set caddy-auth unbanip <IP_ADDRESS>
 sudo fail2ban-client set sshpiperd unbanip <IP_ADDRESS>
 ```
 
@@ -133,8 +150,9 @@ sudo fail2ban-client set sshpiperd unbanip <IP_ADDRESS>
 ### Test Filter Regex
 
 ```bash
-# Test caddy filter against log file
+# Test caddy filters against log file
 sudo fail2ban-regex /var/log/caddy/access.log /etc/fail2ban/filter.d/caddy-flood.conf
+sudo fail2ban-regex /var/log/caddy/access.log /etc/fail2ban/filter.d/caddy-auth.conf
 
 # Test sshpiper filter against journald
 sudo fail2ban-regex systemd-journal /etc/fail2ban/filter.d/sshpiper.conf
