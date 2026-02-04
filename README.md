@@ -182,6 +182,7 @@ sudo ufw allow 2222/tcp    # SSHPiper (container SSH)
 
 # Enable UFW
 sudo ufw enable
+sudo systemctl enable ufw
 ```
 
 After the first vibebin run (which installs Incus), add the bridge rules for container networking:
