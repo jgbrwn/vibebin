@@ -30,11 +30,21 @@ datepattern = "ts":<DATE>
 
 ```ini
 [Definition]
-# Matches the remote_ip and the status code 401/403 at the end of the JSON
-failregex = ^.*"remote_ip":"<HOST>".*"status":(401|403)\D.*$
-# Ignore successful requests
+# Matches the Unix epoch timestamp in Caddy's JSON logs.
+datepattern = LongEpoch
+
+# Multiple failregex lines are treated as OR.
+failregex =
+    # Matches common authentication failures.
+    ^.*"remote_ip":\s*"<HOST>".*"status":\s*(401|403).*$
+
+    # Matches scanners probing for common vulnerabilities/files
+    ^.*"remote_ip":\s*"<HOST>".*"uri":\s*".*(?:/\.git|/\.env|/wp-admin|/wp-login\.php|/xmlrpc\.php).*".*$
+
+    # Matches common malicious user agents.
+    ^.*"remote_ip":\s*"<HOST>".*"User-Agent":\s*\[\s*"(?i:sqlmap|nmap|nikto|wpscan|masscan)".*].*$
+
 ignoreregex =
-datepattern = "ts":<DATE>
 ```
 
 ### SSHPiper Filter
@@ -83,7 +93,7 @@ port = http,https
 filter = caddy-auth
 logpath = /var/log/caddy/access.log
 findtime = 5m
-maxretry = 30
+maxretry = 3
 bantime = 12h
 bantime.increment = true
 bantime.factor    = 2
