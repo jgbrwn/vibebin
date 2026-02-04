@@ -21,7 +21,7 @@ Create the following configuration files:
 # Matches every single request from an IP regardless of success/failure
 failregex = ^.*"remote_ip":"<HOST>".*$
 ignoreregex =
-datepattern = "ts":<DATE>
+datepattern = LongEpoch
 ```
 
 ### Caddy Auth Filter
