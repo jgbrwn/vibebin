@@ -2225,6 +2225,8 @@ print("system_prompt.go patched")
 PYEOF
 
 echo "Building UI..."
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
 cd ui
 npm install --silent 2>&1 | tail -3
 npm run build 2>&1 | tail -3
@@ -2713,6 +2715,7 @@ func handleUpdate(w http.ResponseWriter, r *http.Request) {
 		"open('server/system_prompt.go','w').write(c.replace(old,new)); " +
 		"print('Patched')\"\n" +
 		"echo \"Building UI...\"\n" +
+		"export NVM_DIR=\"$HOME/.nvm\" && [ -s \"$NVM_DIR/nvm.sh\" ] && . \"$NVM_DIR/nvm.sh\"\n" +
 		"cd ui && npm install --silent 2>&1 | tail -1 && npm run build 2>&1 | tail -1 && cd ..\n" +
 		"echo \"Building templates...\"\n" +
 		"for dir in templates/*/; do name=$(basename \"$dir\"); tar -czf \"templates/$name.tar.gz\" -C \"templates/$name\" --exclude='.DS_Store' .; done\n" +
@@ -3259,6 +3262,7 @@ with open('server/system_prompt.go', 'w') as f:
 print("system_prompt.go patched")
 PYEOF
 echo "Building UI..."
+export NVM_DIR="$HOME/.nvm" && [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
 cd ui && npm install --silent 2>&1 | tail -2 && npm run build 2>&1 | tail -2 && cd ..
 echo "Building templates..."
 for dir in templates/*/; do name=$(basename "$dir"); tar -czf "templates/$name.tar.gz" -C "templates/$name" --exclude='.DS_Store' .; done
