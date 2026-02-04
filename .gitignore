@@ -38,4 +38,4 @@ go.work.sum
 .idea/
 .vscode/
 
-admin-app/
+deprecated/
