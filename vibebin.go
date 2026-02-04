@@ -2460,10 +2460,10 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleStatus(w http.ResponseWriter, r *http.Request) {
+	state.detectActiveTool() // Synchronous - no goroutine leak
 	state.mu.RLock()
 	at := state.activeTool
 	state.mu.RUnlock()
-	go state.detectActiveTool()
 	tools := []Tool{
 		{Name: "opencode", DisplayName: "OpenCode", Active: at == "opencode"},
 		{Name: "nanocode", DisplayName: "NanoCode", Active: at == "nanocode"},
@@ -2531,8 +2531,8 @@ func stopTool(tool string) {
 func handleLogs(w http.ResponseWriter, r *http.Request) {
 	logPath := filepath.Join(state.homeDir, "admin.code", "logs", LogFile)
 	file, err := os.Open(logPath)
-	lines := []string{}
-	if err == nil { defer file.Close(); sc := bufio.NewScanner(file); for sc.Scan() { lines = append(lines, sc.Text()); if len(lines) > MaxLogLines { lines = lines[1:] } } }
+	lines := make([]string, 0, MaxLogLines) // Pre-allocate capacity
+	if err == nil { defer file.Close(); sc := bufio.NewScanner(file); for sc.Scan() { if len(lines) < MaxLogLines { lines = append(lines, sc.Text()) } else { copy(lines, lines[1:]); lines[MaxLogLines-1] = sc.Text() } } }
 	if len(lines) == 0 { lines = []string{"No logs yet. Start a tool to see output here."} }
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"lines": lines})
@@ -2550,13 +2550,14 @@ func handleUpdate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" { http.Error(w, "Method not allowed", 405); return }
 	w.Header().Set("Content-Type", "text/event-stream"); w.Header().Set("Cache-Control", "no-cache")
 	flusher, _ := w.(http.Flusher)
-	send := func(m string) { fmt.Fprintf(w, "data: %s\n\n", m); flusher.Flush() }
+	ctx := r.Context() // For client disconnect detection
+	send := func(m string) { select { case <-ctx.Done(): return; default: }; fmt.Fprintf(w, "data: %s\n\n", m); flusher.Flush() }
 	
 	// Reset cancellation flag
 	atomic.StoreInt32(&updateCancelled, 0)
 	
-	// Helper to check if cancelled
-	isCancelled := func() bool { return atomic.LoadInt32(&updateCancelled) == 1 }
+	// Helper to check if cancelled or client disconnected
+	isCancelled := func() bool { select { case <-ctx.Done(): return true; default: }; return atomic.LoadInt32(&updateCancelled) == 1 }
 	
 	// Step 1: Stop running processes
 	send("Checking for running processes...")
