@@ -295,7 +295,7 @@ During container creation, the following is automatically installed:
 **Development Tools:**
 - **Docker** (via official get.docker.com script)
 - **Go** (latest version, architecture auto-detected)
-- **Node.js** (latest via nvm)
+- **Node.js** (latest LTS via NodeSource)
 - **Bun** (JavaScript runtime and package manager)
 - **Deno** (JavaScript/TypeScript runtime)
 - **uv** (Python package manager from Astral)

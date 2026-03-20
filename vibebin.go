@@ -2067,17 +2067,19 @@ echo "Go ${GO_VERSION} installed successfully"
 	}
 	userExec("grep -q 'go/bin' ~/.bashrc || echo 'export PATH=$PATH:/usr/local/go/bin:$HOME/go/bin' >> ~/.bashrc")
 
-	// STEP 5: Install nvm and Node.js
-	sendProgress("Installing nvm and Node.js...")
-	if err := userExec("curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.4/install.sh | bash"); err != nil {
-		sendProgress(fmt.Sprintf("Warning: nvm installation failed: %v", err))
+	// STEP 5: Install Node.js (latest LTS)
+	sendProgress("Installing Node.js (latest LTS)...")
+	nodeInstallScript := `
+set -e
+export DEBIAN_FRONTEND=noninteractive
+curl -fsSL https://deb.nodesource.com/setup_lts.x | bash -
+apt-get install -y nodejs
+echo "Node.js $(node --version) installed successfully"
+`
+	if err := runScriptInContainer(containerName, nodeInstallScript, "install-node.sh"); err != nil {
+		sendProgress(fmt.Sprintf("Warning: Node.js installation failed: %v", err))
 	} else {
-		// Install latest Node.js via nvm (need to source nvm first)
-		if err := userExec("export NVM_DIR=\"$HOME/.nvm\" && [ -s \"$NVM_DIR/nvm.sh\" ] && . \"$NVM_DIR/nvm.sh\" && nvm install node"); err != nil {
-			sendProgress(fmt.Sprintf("Warning: Node.js installation via nvm failed: %v", err))
-		} else {
-			sendProgress("✅ nvm and Node.js installed")
-		}
+		sendProgress("✅ Node.js installed")
 	}
 
 	// STEP 6: Install uv (Python package manager)
@@ -2225,8 +2227,6 @@ print("system_prompt.go patched")
 PYEOF
 
 echo "Building UI..."
-export NVM_DIR="$HOME/.nvm"
-[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
 cd ui
 npm install --silent 2>&1 | tail -3
 npm run build 2>&1 | tail -3
@@ -2715,7 +2715,6 @@ func handleUpdate(w http.ResponseWriter, r *http.Request) {
 		"open('server/system_prompt.go','w').write(c.replace(old,new)); " +
 		"print('Patched')\"\n" +
 		"echo \"Building UI...\"\n" +
-		"export NVM_DIR=\"$HOME/.nvm\" && [ -s \"$NVM_DIR/nvm.sh\" ] && . \"$NVM_DIR/nvm.sh\"\n" +
 		"cd ui && npm install --silent 2>&1 | tail -1 && npm run build 2>&1 | tail -1 && cd ..\n" +
 		"echo \"Building templates...\"\n" +
 		"for dir in templates/*/; do name=$(basename \"$dir\"); tar -czf \"templates/$name.tar.gz\" -C \"templates/$name\" --exclude='.DS_Store' .; done\n" +
@@ -2889,7 +2888,7 @@ echo "  ────────────────────────
 echo "  Installed Tools:"
 echo "    • Docker    $(docker --version 2>/dev/null | awk '{print $3}' | tr -d ',' || echo 'not found')"
 echo "    • Go        $(/usr/local/go/bin/go version 2>/dev/null | awk '{print $3}' | sed 's/go//' || echo 'not found')"
-echo "    • Node.js   $([ -s \"${USER_HOME}/.nvm/nvm.sh\" ] && . \"${USER_HOME}/.nvm/nvm.sh\" && node --version 2>/dev/null || echo 'not found')"
+echo "    • Node.js   $(node --version 2>/dev/null || echo 'not found')"
 echo "    • Bun       $(${USER_HOME}/.bun/bin/bun --version 2>/dev/null || echo 'not found')"
 echo "    • Deno      $(${USER_HOME}/.deno/bin/deno --version 2>/dev/null | head -1 | awk '{print $2}' || echo 'not found')"
 echo "    • uv        $(${USER_HOME}/.local/bin/uv --version 2>/dev/null | awk '{print $2}' || echo 'not found')"
@@ -3262,7 +3261,6 @@ with open('server/system_prompt.go', 'w') as f:
 print("system_prompt.go patched")
 PYEOF
 echo "Building UI..."
-export NVM_DIR="$HOME/.nvm" && [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
 cd ui && npm install --silent 2>&1 | tail -2 && npm run build 2>&1 | tail -2 && cd ..
 echo "Building templates..."
 for dir in templates/*/; do name=$(basename "$dir"); tar -czf "templates/$name.tar.gz" -C "templates/$name" --exclude='.DS_Store' .; done
